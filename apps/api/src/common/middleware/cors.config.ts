@@ -23,7 +23,14 @@ export function createCorsConfig(allowedOrigins: string[]): CorsOptions {
       'X-Request-Id',
       'Idempotency-Key',
     ],
-    exposedHeaders: ['X-Request-Id', 'Idempotency-Key'],
+    exposedHeaders: [
+      'X-Request-Id',
+      'Idempotency-Key',
+      'X-RateLimit-Limit',
+      'X-RateLimit-Remaining',
+      'X-RateLimit-Reset',
+      'Retry-After',
+    ],
     maxAge: 86_400, // 24h preflight cache
   };
 }
