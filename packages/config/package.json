@@ -1,0 +1,19 @@
+{
+  "name": "@saziqo/config",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./eslint": "./eslint.config.js",
+    "./prettier": "./prettier.config.js"
+  },
+  "dependencies": {
+    "eslint-plugin-import-x": "^4.13.3",
+    "typescript-eslint": "^8.32.1"
+  },
+  "peerDependencies": {
+    "eslint": ">=9",
+    "prettier": ">=3",
+    "typescript": ">=5"
+  }
+}
