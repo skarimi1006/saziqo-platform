@@ -24,4 +24,11 @@ export class ConfigService {
   get isProduction(): boolean {
     return this.get('NODE_ENV') === 'production';
   }
+
+  get corsAllowedOrigins(): string[] {
+    return this.get('CORS_ALLOWED_ORIGINS')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
 }

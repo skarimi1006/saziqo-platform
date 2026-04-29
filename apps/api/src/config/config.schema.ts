@@ -52,6 +52,9 @@ export const envSchema = z.object({
   // File storage
   FILE_STORAGE_PATH: z.string().default('/var/saziqo-platform/files'),
   FILE_MAX_SIZE_MB: z.coerce.number().int().positive().default(10),
+
+  // CORS — comma-separated list of allowed origins
+  CORS_ALLOWED_ORIGINS: z.string().default('http://localhost:3000'),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
