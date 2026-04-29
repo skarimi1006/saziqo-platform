@@ -7,6 +7,7 @@ import { ResponseInterceptor } from './common/interceptors/response.interceptor'
 import { PinoLoggerModule } from './common/middleware/logger.middleware';
 import { RateLimitGuard } from './common/middleware/rate-limit.middleware';
 import { ConfigModule } from './config/config.module';
+import { HealthModule } from './core/health/health.module';
 import { PrismaModule } from './core/prisma/prisma.module';
 import { RedisModule } from './core/redis/redis.module';
 
@@ -15,7 +16,7 @@ import { RedisModule } from './core/redis/redis.module';
 // already-wrapped { data, meta? } envelope produced by ResponseInterceptor,
 // so Idempotency goes first (outer), Response second (inner).
 @Module({
-  imports: [PinoLoggerModule, ConfigModule, PrismaModule, RedisModule],
+  imports: [PinoLoggerModule, ConfigModule, PrismaModule, RedisModule, HealthModule],
   providers: [
     { provide: APP_INTERCEPTOR, useClass: IdempotencyInterceptor },
     { provide: APP_INTERCEPTOR, useClass: ResponseInterceptor },
