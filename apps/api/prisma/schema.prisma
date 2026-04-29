@@ -1,0 +1,287 @@
+// CLAUDE: This is the canonical core schema. Modules add their own
+// schema files later via Prisma multi-file schemas. Core tables here
+// are owned by the system, never by a business module. Migrations are
+// append-only — never edit a migration that has been applied.
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  // CLAUDE: S4 read-replica plumbing. For v1 there is one URL.
+  // To enable a read replica later, set DATABASE_READ_URL in env and
+  // construct a separate PrismaClient inside PrismaService for reads.
+}
+
+// ─── Auth & Users ────────────────────────────────────────────────────
+
+model User {
+  id                 BigInt     @id @default(autoincrement())
+  phone              String     @unique @db.VarChar(15)
+  phoneVerifiedAt    DateTime?
+  firstName          String?    @db.VarChar(80)
+  lastName           String?    @db.VarChar(120)
+  nationalId         String?    @unique @db.VarChar(10)
+  email              String?    @unique @db.VarChar(255)
+  emailVerifiedAt    DateTime?
+  profileCompletedAt DateTime?
+  status             UserStatus @default(PENDING_PROFILE)
+  totpSecret         String?    @db.VarChar(64)
+  totpEnabledAt      DateTime?
+  betaFlags          String[]   @default([])
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+  deletedAt          DateTime?
+
+  sessions      Session[]
+  userRoles     UserRole[]
+  auditLogs     AuditLog[]
+  notifications Notification[]
+  wallet        Wallet?
+  files         File[]
+  ledgerEntries LedgerEntry[]
+
+  @@index([status])
+  @@index([deletedAt])
+  @@map("users")
+}
+
+enum UserStatus {
+  PENDING_PROFILE
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+model Session {
+  id               BigInt    @id @default(autoincrement())
+  userId           BigInt
+  refreshTokenHash String    @unique @db.VarChar(128)
+  userAgent        String?   @db.VarChar(512)
+  ipAddress        String?   @db.VarChar(45)
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+// ─── RBAC ────────────────────────────────────────────────────────────
+
+model Role {
+  id          BigInt   @id @default(autoincrement())
+  name        String   @unique @db.VarChar(50)
+  persianName String   @db.VarChar(100)
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  rolePermissions RolePermission[]
+  userRoles       UserRole[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          BigInt   @id @default(autoincrement())
+  // SECURITY: Permission codes follow strict format module:action:resource
+  // (e.g. users:read:profile, ledger:approve:payout). Validated at seed time.
+  code        String   @unique @db.VarChar(120)
+  description String?  @db.VarChar(255)
+  createdAt   DateTime @default(now())
+
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       BigInt
+  permissionId BigInt
+  createdAt    DateTime @default(now())
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  userId    BigInt
+  roleId    BigInt
+  // CLAUDE: scope is an optional JSON object for scoped permissions
+  // (e.g. { ownership: "any" } vs { ownership: "own" }). Null = no scope.
+  scope     Json?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+// ─── Audit (append-only) ─────────────────────────────────────────────
+
+model AuditLog {
+  id          BigInt   @id @default(autoincrement())
+  // CLAUDE: actorUserId is nullable for system-generated audit entries
+  // (e.g. cron jobs) and to retain history after a user is hard-deleted.
+  actorUserId BigInt?
+  action      String   @db.VarChar(100)
+  resource    String   @db.VarChar(100)
+  resourceId  String?  @db.VarChar(64)
+  // SECURITY: payloadHash (sha256) records the inputs without storing
+  // potentially-sensitive payload values directly.
+  payloadHash String   @db.VarChar(64)
+  ipAddress   String?  @db.VarChar(45)
+  userAgent   String?  @db.VarChar(512)
+  createdAt   DateTime @default(now())
+
+  actor User? @relation(fields: [actorUserId], references: [id])
+
+  @@index([actorUserId])
+  @@index([resource, resourceId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ─── Notifications ───────────────────────────────────────────────────
+
+model Notification {
+  id        BigInt              @id @default(autoincrement())
+  userId    BigInt
+  channel   NotificationChannel
+  type      String              @db.VarChar(100)
+  payload   Json
+  readAt    DateTime?
+  createdAt DateTime            @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  SMS
+}
+
+// ─── Settings ────────────────────────────────────────────────────────
+
+model Setting {
+  id        BigInt       @id @default(autoincrement())
+  scope     SettingScope
+  // CLAUDE: scopeId is the ID of the scope owner — userId for USER scope,
+  // moduleName-derived id for MODULE scope, null for GLOBAL scope.
+  scopeId   BigInt?
+  key       String       @db.VarChar(120)
+  value     Json
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  @@unique([scope, scopeId, key])
+  @@map("settings")
+}
+
+enum SettingScope {
+  GLOBAL
+  USER
+  MODULE
+}
+
+// ─── Ledger (append-only) ────────────────────────────────────────────
+
+model LedgerEntry {
+  id          BigInt     @id @default(autoincrement())
+  userId      BigInt?
+  walletId    BigInt?
+  kind        LedgerKind
+  // SECURITY: amount is BigInt (toman) — integer only, no floats. Always
+  // positive; direction is encoded by `kind` (DEBIT vs CREDIT).
+  amount      BigInt
+  currency    String     @default("IRT") @db.VarChar(3)
+  reference   String?    @db.VarChar(120)
+  description String?    @db.VarChar(255)
+  createdAt   DateTime   @default(now())
+
+  user   User?   @relation(fields: [userId], references: [id])
+  wallet Wallet? @relation(fields: [walletId], references: [id])
+
+  @@index([userId])
+  @@index([walletId])
+  @@index([reference])
+  @@index([createdAt])
+  @@map("ledger_entries")
+}
+
+enum LedgerKind {
+  DEBIT
+  CREDIT
+}
+
+model Wallet {
+  id        BigInt   @id @default(autoincrement())
+  userId    BigInt   @unique
+  // SECURITY: balance must equal sum of ledger entries for this wallet.
+  // Reconciliation job (Phase 9F) detects drift.
+  balance   BigInt   @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user          User          @relation(fields: [userId], references: [id])
+  ledgerEntries LedgerEntry[]
+
+  @@map("wallets")
+}
+
+// ─── Files ───────────────────────────────────────────────────────────
+
+model File {
+  id           BigInt    @id @default(autoincrement())
+  ownerUserId  BigInt
+  path         String    @db.VarChar(512)
+  originalName String    @db.VarChar(255)
+  mimeType     String    @db.VarChar(120)
+  size         BigInt
+  // SECURITY: sha256 deduplicates uploads and lets us detect tampering.
+  sha256       String    @unique @db.VarChar(64)
+  createdAt    DateTime  @default(now())
+  deletedAt    DateTime?
+
+  owner User @relation(fields: [ownerUserId], references: [id])
+
+  @@index([ownerUserId])
+  @@index([deletedAt])
+  @@map("files")
+}
+
+// ─── OTP attempts (append-only) ──────────────────────────────────────
+
+model OtpAttempt {
+  id         BigInt    @id @default(autoincrement())
+  phone      String    @db.VarChar(15)
+  // SECURITY: codeHash is sha256(secret + code); never store the OTP itself.
+  codeHash   String    @db.VarChar(128)
+  attempts   Int       @default(0)
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([phone, createdAt])
+  @@index([expiresAt])
+  @@map("otp_attempts")
+}

@@ -21,10 +21,11 @@ export default tseslint.config(
           caughtErrorsIgnorePattern: '^_',
         },
       ],
-      '@typescript-eslint/consistent-type-imports': [
-        'error',
-        { prefer: 'type-imports', fixStyle: 'inline-type-imports' },
-      ],
+      // CLAUDE: consistent-type-imports is OFF on purpose. NestJS uses
+      // Reflect metadata on constructor param types; turning runtime imports
+      // into type-only imports breaks DI. Re-enable only with verbatimModuleSyntax
+      // and per-file overrides for NestJS provider classes.
+      '@typescript-eslint/consistent-type-imports': 'off',
       'no-console': 'warn',
       'import/order': [
         'error',
