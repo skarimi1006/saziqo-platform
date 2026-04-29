@@ -1,7 +1,10 @@
 import { Module } from '@nestjs/common';
 
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { PermissionGuard } from '../../common/guards/permission.guard';
 import { PrismaModule } from '../prisma/prisma.module';
 
+import { UsersController } from './users.controller';
 import { UsersRepository } from './users.repository';
 import { UsersService } from './users.service';
 
@@ -10,7 +13,8 @@ import { UsersService } from './users.service';
 // readers and keep this module self-describing.
 @Module({
   imports: [PrismaModule],
-  providers: [UsersService, UsersRepository],
+  controllers: [UsersController],
+  providers: [UsersService, UsersRepository, JwtAuthGuard, PermissionGuard],
   exports: [UsersService],
 })
 export class UsersModule {}
