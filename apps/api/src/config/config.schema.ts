@@ -34,6 +34,12 @@ export const envSchema = z.object({
   JWT_EXPIRES_IN: z.string().default('15m'),
   JWT_REFRESH_EXPIRES_IN: z.string().default('30d'),
 
+  // Auth — OTP
+  // SECURITY: Used as salt in sha256(code + phone + OTP_SALT) so an attacker
+  // who exfiltrates the otp_attempts table cannot precompute rainbow tables.
+  // Generate with: openssl rand -hex 32
+  OTP_SALT: z.string().min(32, 'OTP_SALT must be at least 32 characters'),
+
   // Auth — Super Admin
   // SECURITY: Phone must be an Iranian E.164 number; seeded at first boot.
   SUPER_ADMIN_PHONE: z
