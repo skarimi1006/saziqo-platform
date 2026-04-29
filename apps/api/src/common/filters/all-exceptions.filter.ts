@@ -135,18 +135,21 @@ function mapPrismaError(error: Prisma.PrismaClientKnownRequestError): MappedExce
 
 function mapHttpException(exception: HttpException): MappedException {
   const status = exception.getStatus();
-  const code = mapHttpToCode(status);
   const response = exception.getResponse();
-  const { message, details } = unpackHttpResponse(response, exception.message);
+  const { code, message, details } = unpackHttpResponse(response, exception.message, status);
   return details !== undefined ? { status, code, message, details } : { status, code, message };
 }
 
+// Extracts code/message/details from an HttpException's response. The thrower
+// may pass a `code` field to override the default status→code mapping (used
+// e.g. by IdempotencyInterceptor to surface IDEMPOTENCY_KEY_REQUIRED on a 400).
 function unpackHttpResponse(
   response: string | object,
   fallbackMessage: string,
-): { message: string; details?: unknown } {
+  status: number,
+): { code: string; message: string; details?: unknown } {
   if (typeof response === 'string') {
-    return { message: response };
+    return { code: mapHttpToCode(status), message: response };
   }
   if (response !== null && typeof response === 'object') {
     const r = response as Record<string, unknown>;
@@ -159,10 +162,11 @@ function unpackHttpResponse(
     } else {
       message = fallbackMessage;
     }
+    const code = typeof r['code'] === 'string' ? r['code'] : mapHttpToCode(status);
     const details = r['details'];
-    return details !== undefined ? { message, details } : { message };
+    return details !== undefined ? { code, message, details } : { code, message };
   }
-  return { message: fallbackMessage };
+  return { code: mapHttpToCode(status), message: fallbackMessage };
 }
 
 function mapUnknownError(exception: unknown, isProduction: boolean): MappedException {

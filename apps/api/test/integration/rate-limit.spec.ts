@@ -1,15 +1,23 @@
 import 'reflect-metadata';
 import '../../src/common/bigint-serialization';
 
-import { type INestApplication } from '@nestjs/common';
+import { Controller, Get, type INestApplication } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 
 import { AppModule } from '../../src/app.module';
 import { RedisService } from '../../src/core/redis/redis.service';
 
-// Drives the diagnostics endpoint past the default 30/min/ip limit and
-// verifies that the 31st request is rejected with the canonical envelope.
+// Test-only controller. Production code has no diagnostic endpoints (removed
+// in Phase 2F); the rate-limit test mounts its own minimal route here.
+@Controller('test-ping')
+class TestPingController {
+  @Get()
+  ping(): { ok: boolean } {
+    return { ok: true };
+  }
+}
+
 describe('Rate limiting (integration)', () => {
   let app: INestApplication;
   let redis: RedisService;
@@ -17,6 +25,7 @@ describe('Rate limiting (integration)', () => {
   beforeAll(async () => {
     const moduleRef: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
+      controllers: [TestPingController],
     }).compile();
 
     app = moduleRef.createNestApplication({ bufferLogs: false });
@@ -40,14 +49,14 @@ describe('Rate limiting (integration)', () => {
   });
 
   it('returns 429 on the 31st request from the same IP within 60 seconds', async () => {
-    const path = '/api/v1/_diagnostics/echo?msg=test';
+    const path = '/api/v1/test-ping';
     const server = app.getHttpServer();
 
     // First 30 requests succeed.
     for (let i = 0; i < 30; i += 1) {
       const res = await request(server).get(path);
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ data: { echo: 'test' } });
+      expect(res.body).toEqual({ data: { ok: true } });
       expect(res.headers['x-ratelimit-limit']).toBe('30');
       expect(Number(res.headers['x-ratelimit-remaining'])).toBe(29 - i);
     }
@@ -65,7 +74,7 @@ describe('Rate limiting (integration)', () => {
   });
 
   it('exposes X-RateLimit-* headers on every successful response', async () => {
-    const res = await request(app.getHttpServer()).get('/api/v1/_diagnostics/echo?msg=hi');
+    const res = await request(app.getHttpServer()).get('/api/v1/test-ping');
     expect(res.status).toBe(200);
     expect(res.headers['x-ratelimit-limit']).toBe('30');
     expect(res.headers['x-ratelimit-remaining']).toBe('29');
