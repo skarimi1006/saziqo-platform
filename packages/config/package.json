@@ -5,7 +5,10 @@
   "type": "module",
   "exports": {
     "./eslint": "./eslint.config.js",
-    "./prettier": "./prettier.config.js"
+    "./prettier": "./prettier.config.js",
+    "./tsconfig.base.json": "./tsconfig.base.json",
+    "./tsconfig.node.json": "./tsconfig.node.json",
+    "./tsconfig.next.json": "./tsconfig.next.json"
   },
   "dependencies": {
     "eslint-plugin-import-x": "^4.13.3",

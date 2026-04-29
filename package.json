@@ -17,6 +17,12 @@
     "format": "prettier --write .",
     "prepare": "husky"
   },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@nestjs/core",
+      "unrs-resolver"
+    ]
+  },
   "devDependencies": {
     "@saziqo/config": "workspace:*",
     "eslint": "^9.26.0",
