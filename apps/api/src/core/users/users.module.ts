@@ -11,6 +11,7 @@ import { UsersService } from './users.service';
 // PrismaModule is @Global so importing here is technically redundant,
 // but explicit imports make the dependency graph clearer for module
 // readers and keep this module self-describing.
+// RedisModule, RbacModule, ConfigModule are @Global — no explicit import needed.
 @Module({
   imports: [PrismaModule],
   controllers: [UsersController],

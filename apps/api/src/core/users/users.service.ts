@@ -1,8 +1,22 @@
-import { Injectable } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { Prisma, User, UserStatus } from '@prisma/client';
+
+import { ErrorCode } from '../../common/types/response.types';
+import { ConfigService } from '../../config/config.service';
+import { PermissionsService } from '../rbac/permissions.service';
+import { RedisService } from '../redis/redis.service';
 
 import { CompleteProfileDto } from './dto/complete-profile.dto';
 import { UsersRepository } from './users.repository';
+
+// CLAUDE: Transitions that are legal in the admin context. DELETED is a
+// terminal state — no transitions out. Phase 5D adds per-role guards.
+const STATUS_TRANSITIONS: Record<UserStatus, UserStatus[]> = {
+  [UserStatus.PENDING_PROFILE]: [UserStatus.ACTIVE, UserStatus.SUSPENDED, UserStatus.DELETED],
+  [UserStatus.ACTIVE]: [UserStatus.SUSPENDED, UserStatus.DELETED],
+  [UserStatus.SUSPENDED]: [UserStatus.ACTIVE, UserStatus.DELETED],
+  [UserStatus.DELETED]: [],
+};
 
 export interface AdminUserFilters {
   status?: UserStatus | undefined;
@@ -47,9 +61,16 @@ type UserWithDetails = {
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly repo: UsersRepository) {}
+  private readonly logger = new Logger(UsersService.name);
 
-  // Reads — go through repo.read() so a future read replica picks them up.
+  constructor(
+    private readonly repo: UsersRepository,
+    private readonly redis: RedisService,
+    private readonly permissions: PermissionsService,
+    private readonly config: ConfigService,
+  ) {}
+
+  // ──────── Reads (use repo.read() for future read-replica support) ────────
 
   async findByPhone(phone: string): Promise<User | null> {
     return this.repo.read().user.findUnique({ where: { phone } });
@@ -129,7 +150,7 @@ export class UsersService {
     return this.sanitizeForAdmin(user as UserWithDetails);
   }
 
-  // Writes — go through repo.write(). Always primary DB.
+  // ──────── Writes (always primary DB via repo.write()) ────────
 
   async create(input: { phone: string }): Promise<User> {
     return this.repo.write().user.create({
@@ -179,7 +200,132 @@ export class UsersService {
     });
   }
 
-  // ──────── private helpers ────────
+  // ──────── Admin mutations ────────
+
+  async updateStatusByAdmin(
+    userId: bigint,
+    newStatus: UserStatus,
+    actorUserId: bigint,
+  ): Promise<User> {
+    const user = await this.repo.read().user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new HttpException(
+        { code: ErrorCode.NOT_FOUND, message: 'User not found' },
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    const allowed = STATUS_TRANSITIONS[user.status] ?? [];
+    if (!allowed.includes(newStatus)) {
+      throw new HttpException(
+        {
+          code: ErrorCode.INVALID_STATUS_TRANSITION,
+          message: `Cannot transition from ${user.status} to ${newStatus}`,
+        },
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    const updated = await this.repo.write().user.update({
+      where: { id: userId },
+      data: { status: newStatus },
+    });
+
+    await this.invalidateUserCache(userId);
+
+    // CLAUDE: Placeholder — replaced by AuditService in Phase 6B.
+    this.logger.log(
+      JSON.stringify({
+        event: 'ADMIN_USER_STATUS_CHANGED',
+        actorUserId: String(actorUserId),
+        targetUserId: String(userId),
+        changes: { status: newStatus },
+      }),
+    );
+
+    return updated;
+  }
+
+  async assignRoleByAdmin(
+    userId: bigint,
+    roleId: bigint,
+    scope: Record<string, unknown> | undefined,
+    actorUserId: bigint,
+  ): Promise<void> {
+    const user = await this.repo.read().user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new HttpException(
+        { code: ErrorCode.NOT_FOUND, message: 'User not found' },
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    await this.permissions.assignRoleToUser(userId, roleId, scope);
+    await this.invalidateUserCache(userId);
+
+    // CLAUDE: Placeholder — replaced by AuditService in Phase 6B.
+    this.logger.log(
+      JSON.stringify({
+        event: 'ADMIN_ROLE_ASSIGNED',
+        actorUserId: String(actorUserId),
+        targetUserId: String(userId),
+        roleId: String(roleId),
+      }),
+    );
+  }
+
+  // SECURITY: The bootstrap super_admin cannot have their super_admin role removed.
+  // This prevents accidental lock-out of the platform. Other admins can still
+  // be demoted — only the user whose phone matches SUPER_ADMIN_PHONE is protected.
+  async removeRoleByAdmin(userId: bigint, roleId: bigint, actorUserId: bigint): Promise<void> {
+    const user = await this.repo.read().user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new HttpException(
+        { code: ErrorCode.NOT_FOUND, message: 'User not found' },
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    const superAdminPhone = this.config.get('SUPER_ADMIN_PHONE');
+    if (user.phone === superAdminPhone) {
+      const role = await this.repo.read().role.findUnique({
+        where: { id: roleId },
+        select: { name: true },
+      });
+      if (role?.name === 'super_admin') {
+        throw new HttpException(
+          {
+            code: ErrorCode.CANNOT_REMOVE_BOOTSTRAP_ADMIN,
+            message: 'Cannot remove the super_admin role from the bootstrap admin user',
+          },
+          HttpStatus.CONFLICT,
+        );
+      }
+    }
+
+    await this.permissions.removeRoleFromUser(userId, roleId);
+    await this.invalidateUserCache(userId);
+
+    // CLAUDE: Placeholder — replaced by AuditService in Phase 6B.
+    this.logger.log(
+      JSON.stringify({
+        event: 'ADMIN_ROLE_REMOVED',
+        actorUserId: String(actorUserId),
+        targetUserId: String(userId),
+        roleId: String(roleId),
+      }),
+    );
+  }
+
+  // ──────── Private helpers ────────
+
+  private async invalidateUserCache(userId: bigint): Promise<void> {
+    const client = this.redis.getClient();
+    await Promise.all([
+      client.del(`user:permissions:${userId}`),
+      client.del(`user:status:${userId}`),
+    ]);
+  }
 
   // SECURITY: nationalId is masked to expose only the last 4 digits.
   // Phone is shown in full in admin context — admins need it for support.

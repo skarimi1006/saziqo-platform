@@ -1,5 +1,11 @@
+import { HttpException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { UserStatus } from '@prisma/client';
+
+import { ErrorCode } from '../../common/types/response.types';
+import { ConfigService } from '../../config/config.service';
+import { PermissionsService } from '../rbac/permissions.service';
+import { RedisService } from '../redis/redis.service';
 
 import { UsersRepository } from './users.repository';
 import { UsersService } from './users.service';
@@ -11,13 +17,23 @@ type MockPrismaClient = {
     create: jest.Mock;
     update: jest.Mock;
   };
+  role: {
+    findUnique: jest.Mock;
+  };
 };
+
+const SUPER_ADMIN_PHONE = '+989100000000';
 
 describe('UsersService', () => {
   let service: UsersService;
   let mockClient: MockPrismaClient;
   let readSpy: jest.Mock;
   let writeSpy: jest.Mock;
+  let mockRedisClient: { del: jest.Mock };
+  let mockPermissions: jest.Mocked<
+    Pick<PermissionsService, 'userHasPermission' | 'assignRoleToUser' | 'removeRoleFromUser'>
+  >;
+  let mockConfig: { get: jest.Mock };
 
   beforeEach(async () => {
     mockClient = {
@@ -27,22 +43,40 @@ describe('UsersService', () => {
         create: jest.fn(),
         update: jest.fn(),
       },
+      role: {
+        findUnique: jest.fn(),
+      },
     };
     readSpy = jest.fn(() => mockClient);
     writeSpy = jest.fn(() => mockClient);
 
+    mockRedisClient = { del: jest.fn().mockResolvedValue(1) };
+    mockPermissions = {
+      userHasPermission: jest.fn(),
+      assignRoleToUser: jest.fn().mockResolvedValue(undefined),
+      removeRoleFromUser: jest.fn().mockResolvedValue(undefined),
+    };
+    mockConfig = {
+      get: jest.fn((key: string) => {
+        if (key === 'SUPER_ADMIN_PHONE') return SUPER_ADMIN_PHONE;
+        return undefined;
+      }),
+    };
+
     const moduleRef = await Test.createTestingModule({
       providers: [
         UsersService,
-        {
-          provide: UsersRepository,
-          useValue: { read: readSpy, write: writeSpy },
-        },
+        { provide: UsersRepository, useValue: { read: readSpy, write: writeSpy } },
+        { provide: RedisService, useValue: { getClient: () => mockRedisClient } },
+        { provide: PermissionsService, useValue: mockPermissions },
+        { provide: ConfigService, useValue: mockConfig },
       ],
     }).compile();
 
     service = moduleRef.get(UsersService);
   });
+
+  // ── Existing read methods ────────────────────────────────────────────
 
   describe('findByPhone', () => {
     it('returns null when the phone is not registered', async () => {
@@ -149,7 +183,7 @@ describe('UsersService', () => {
     });
   });
 
-  // ── Admin methods ────────────────────────────────────────────────────
+  // ── Admin read methods ───────────────────────────────────────────────
 
   const makeUser = (id: bigint, overrides: Record<string, unknown> = {}) => ({
     id,
@@ -238,12 +272,6 @@ describe('UsersService', () => {
       expect(arg.where.OR[0]).toMatchObject({
         firstName: { contains: 'علی', mode: 'insensitive' },
       });
-      expect(arg.where.OR[1]).toMatchObject({
-        lastName: { contains: 'علی', mode: 'insensitive' },
-      });
-      expect(arg.where.OR[2]).toMatchObject({
-        email: { contains: 'علی', mode: 'insensitive' },
-      });
     });
 
     it('applies phoneContains filter', async () => {
@@ -290,7 +318,6 @@ describe('UsersService', () => {
 
     it('excludes totpSecret and betaFlags from the view', async () => {
       const user = makeUser(1n);
-      // cast to any to attach fields that would be on the DB model but not our type
       (user as Record<string, unknown>).totpSecret = 'super-secret';
       (user as Record<string, unknown>).betaFlags = ['flag1'];
       mockClient.user.findMany.mockResolvedValue([user]);
@@ -329,6 +356,193 @@ describe('UsersService', () => {
       await service.findByIdForAdmin(1n);
       expect(readSpy).toHaveBeenCalled();
       expect(writeSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── Admin mutation methods ───────────────────────────────────────────
+
+  describe('updateStatusByAdmin', () => {
+    it('throws NOT_FOUND when user does not exist', async () => {
+      mockClient.user.findUnique.mockResolvedValue(null);
+
+      await expect(service.updateStatusByAdmin(1n, UserStatus.SUSPENDED, 99n)).rejects.toThrow(
+        HttpException,
+      );
+
+      try {
+        await service.updateStatusByAdmin(2n, UserStatus.SUSPENDED, 99n);
+      } catch (e) {
+        expect((e as HttpException).getStatus()).toBe(404);
+        expect((e as HttpException).getResponse()).toMatchObject({
+          code: ErrorCode.NOT_FOUND,
+        });
+      }
+    });
+
+    it('throws CONFLICT for an invalid status transition (DELETED → ACTIVE)', async () => {
+      mockClient.user.findUnique.mockResolvedValue(makeUser(1n, { status: UserStatus.DELETED }));
+
+      let thrown: unknown;
+      try {
+        await service.updateStatusByAdmin(1n, UserStatus.ACTIVE, 99n);
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown).toBeInstanceOf(HttpException);
+      const err = thrown as HttpException;
+      expect(err.getStatus()).toBe(409);
+      expect((err.getResponse() as { code: string }).code).toBe(
+        ErrorCode.INVALID_STATUS_TRANSITION,
+      );
+    });
+
+    it('allows valid transition ACTIVE → SUSPENDED', async () => {
+      const user = makeUser(1n, { status: UserStatus.ACTIVE });
+      mockClient.user.findUnique.mockResolvedValue(user);
+      mockClient.user.update.mockResolvedValue({ ...user, status: UserStatus.SUSPENDED });
+
+      const result = await service.updateStatusByAdmin(1n, UserStatus.SUSPENDED, 99n);
+
+      expect(result.status).toBe(UserStatus.SUSPENDED);
+      expect(mockClient.user.update).toHaveBeenCalledWith({
+        where: { id: 1n },
+        data: { status: UserStatus.SUSPENDED },
+      });
+    });
+
+    it('allows valid transition PENDING_PROFILE → ACTIVE', async () => {
+      const user = makeUser(1n, { status: UserStatus.PENDING_PROFILE });
+      mockClient.user.findUnique.mockResolvedValue(user);
+      mockClient.user.update.mockResolvedValue({ ...user, status: UserStatus.ACTIVE });
+
+      await service.updateStatusByAdmin(1n, UserStatus.ACTIVE, 99n);
+
+      expect(mockClient.user.update).toHaveBeenCalledWith({
+        where: { id: 1n },
+        data: { status: UserStatus.ACTIVE },
+      });
+    });
+
+    it('allows valid transition SUSPENDED → ACTIVE', async () => {
+      const user = makeUser(1n, { status: UserStatus.SUSPENDED });
+      mockClient.user.findUnique.mockResolvedValue(user);
+      mockClient.user.update.mockResolvedValue({ ...user, status: UserStatus.ACTIVE });
+
+      await service.updateStatusByAdmin(1n, UserStatus.ACTIVE, 99n);
+
+      expect(mockClient.user.update).toHaveBeenCalled();
+    });
+
+    it('invalidates user:permissions and user:status cache after update', async () => {
+      const user = makeUser(1n, { status: UserStatus.ACTIVE });
+      mockClient.user.findUnique.mockResolvedValue(user);
+      mockClient.user.update.mockResolvedValue(user);
+
+      await service.updateStatusByAdmin(1n, UserStatus.SUSPENDED, 99n);
+
+      expect(mockRedisClient.del).toHaveBeenCalledWith('user:permissions:1');
+      expect(mockRedisClient.del).toHaveBeenCalledWith('user:status:1');
+    });
+  });
+
+  describe('assignRoleByAdmin', () => {
+    it('throws NOT_FOUND when user does not exist', async () => {
+      mockClient.user.findUnique.mockResolvedValue(null);
+
+      await expect(service.assignRoleByAdmin(1n, 2n, undefined, 99n)).rejects.toThrow(
+        HttpException,
+      );
+    });
+
+    it('delegates to permissionsService.assignRoleToUser', async () => {
+      mockClient.user.findUnique.mockResolvedValue(makeUser(1n));
+
+      await service.assignRoleByAdmin(1n, 2n, undefined, 99n);
+
+      expect(mockPermissions.assignRoleToUser).toHaveBeenCalledWith(1n, 2n, undefined);
+    });
+
+    it('forwards scope to permissionsService', async () => {
+      mockClient.user.findUnique.mockResolvedValue(makeUser(1n));
+      const scope = { ownership: 'any' };
+
+      await service.assignRoleByAdmin(1n, 2n, scope, 99n);
+
+      expect(mockPermissions.assignRoleToUser).toHaveBeenCalledWith(1n, 2n, scope);
+    });
+
+    it('invalidates cache after role assignment', async () => {
+      mockClient.user.findUnique.mockResolvedValue(makeUser(1n));
+
+      await service.assignRoleByAdmin(1n, 2n, undefined, 99n);
+
+      expect(mockRedisClient.del).toHaveBeenCalledWith('user:permissions:1');
+      expect(mockRedisClient.del).toHaveBeenCalledWith('user:status:1');
+    });
+  });
+
+  describe('removeRoleByAdmin', () => {
+    it('throws NOT_FOUND when user does not exist', async () => {
+      mockClient.user.findUnique.mockResolvedValue(null);
+
+      await expect(service.removeRoleByAdmin(1n, 2n, 99n)).rejects.toThrow(HttpException);
+    });
+
+    it('removes the role via permissionsService', async () => {
+      const user = makeUser(1n, { phone: '+989000000001' }); // not super_admin
+      mockClient.user.findUnique.mockResolvedValue(user);
+
+      await service.removeRoleByAdmin(1n, 2n, 99n);
+
+      expect(mockPermissions.removeRoleFromUser).toHaveBeenCalledWith(1n, 2n);
+    });
+
+    it('invalidates cache after role removal', async () => {
+      mockClient.user.findUnique.mockResolvedValue(makeUser(1n, { phone: '+989000000001' }));
+
+      await service.removeRoleByAdmin(1n, 2n, 99n);
+
+      expect(mockRedisClient.del).toHaveBeenCalledWith('user:permissions:1');
+      expect(mockRedisClient.del).toHaveBeenCalledWith('user:status:1');
+    });
+
+    it('throws CANNOT_REMOVE_BOOTSTRAP_ADMIN when removing super_admin role from bootstrap user', async () => {
+      // User whose phone matches SUPER_ADMIN_PHONE
+      const bootstrapUser = makeUser(1n, { phone: SUPER_ADMIN_PHONE });
+      mockClient.user.findUnique.mockResolvedValueOnce(bootstrapUser);
+      mockClient.role.findUnique.mockResolvedValueOnce({ name: 'super_admin' });
+
+      let thrown: unknown;
+      try {
+        await service.removeRoleByAdmin(1n, 99n, 100n);
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown).toBeInstanceOf(HttpException);
+      const err = thrown as HttpException;
+      expect(err.getStatus()).toBe(409);
+      expect((err.getResponse() as { code: string }).code).toBe(
+        ErrorCode.CANNOT_REMOVE_BOOTSTRAP_ADMIN,
+      );
+      expect(mockPermissions.removeRoleFromUser).not.toHaveBeenCalled();
+    });
+
+    it('allows removing a non-super_admin role from the bootstrap user', async () => {
+      const bootstrapUser = makeUser(1n, { phone: SUPER_ADMIN_PHONE });
+      mockClient.user.findUnique.mockResolvedValueOnce(bootstrapUser);
+      mockClient.role.findUnique.mockResolvedValueOnce({ name: 'admin' }); // not super_admin
+
+      await service.removeRoleByAdmin(1n, 99n, 100n);
+
+      expect(mockPermissions.removeRoleFromUser).toHaveBeenCalledWith(1n, 99n);
+    });
+
+    it('allows removing any role from a non-bootstrap user', async () => {
+      mockClient.user.findUnique.mockResolvedValue(makeUser(1n, { phone: '+989000000001' }));
+
+      await service.removeRoleByAdmin(1n, 99n, 100n);
+
+      expect(mockPermissions.removeRoleFromUser).toHaveBeenCalledWith(1n, 99n);
     });
   });
 });

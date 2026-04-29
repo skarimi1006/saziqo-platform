@@ -1,13 +1,28 @@
-import { Controller, Get, HttpException, HttpStatus, Param, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpException,
+  HttpStatus,
+  Param,
+  Patch,
+  Post,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { UserStatus } from '@prisma/client';
+import { Request } from 'express';
 import { z } from 'zod';
 
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { ZodBody } from '../../common/decorators/zod-body.decorator';
 import { ZodQuery } from '../../common/decorators/zod-query.decorator';
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { JwtAuthGuard, AuthenticatedUser  } from '../../common/guards/jwt-auth.guard';
 import { PermissionGuard } from '../../common/guards/permission.guard';
 import { ErrorCode } from '../../common/types/response.types';
 
+import { UpdateUserSchema, UpdateUserDto } from './dto/update-user.dto';
 import { UsersService } from './users.service';
 
 const AdminListUsersSchema = z.object({
@@ -22,6 +37,17 @@ const AdminListUsersSchema = z.object({
 });
 
 type AdminListUsersDto = z.infer<typeof AdminListUsersSchema>;
+
+const AssignRoleSchema = z
+  .object({
+    roleId: z.coerce.bigint(),
+    scope: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
+type AssignRoleDto = z.infer<typeof AssignRoleSchema>;
+
+type AuthRequest = Request & { user: AuthenticatedUser };
 
 @Controller('admin/users')
 @UseGuards(JwtAuthGuard, PermissionGuard)
@@ -52,16 +78,7 @@ export class UsersController {
   @Get(':id')
   @RequirePermission('admin:read:users')
   async getUser(@Param('id') id: string) {
-    let userId: bigint;
-    try {
-      userId = BigInt(id);
-    } catch {
-      throw new HttpException(
-        { code: ErrorCode.NOT_FOUND, message: 'User not found' },
-        HttpStatus.NOT_FOUND,
-      );
-    }
-    const user = await this.usersService.findByIdForAdmin(userId);
+    const user = await this.usersService.findByIdForAdmin(this.parseId(id));
     if (!user) {
       throw new HttpException(
         { code: ErrorCode.NOT_FOUND, message: 'User not found' },
@@ -69,5 +86,91 @@ export class UsersController {
       );
     }
     return user;
+  }
+
+  @Patch(':id')
+  @RequirePermission('admin:update:user')
+  async updateUser(
+    @Param('id') id: string,
+    @ZodBody(UpdateUserSchema) body: UpdateUserDto,
+    @Req() req: AuthRequest,
+  ) {
+    const userId = this.parseId(id);
+    const actorId = req.user.id;
+
+    if (body.status !== undefined) {
+      await this.usersService.updateStatusByAdmin(userId, body.status, actorId);
+    }
+
+    // Profile-field updates (name, email) — phone is immutable in v1.
+    const hasProfileUpdate =
+      body.firstName !== undefined || body.lastName !== undefined || body.email !== undefined;
+    if (hasProfileUpdate) {
+      await this.usersService.update(userId, {
+        ...(body.firstName !== undefined && { firstName: body.firstName }),
+        ...(body.lastName !== undefined && { lastName: body.lastName }),
+        ...(body.email !== undefined && { email: body.email }),
+      });
+    }
+
+    const updated = await this.usersService.findByIdForAdmin(userId);
+    if (!updated) {
+      throw new HttpException(
+        { code: ErrorCode.NOT_FOUND, message: 'User not found' },
+        HttpStatus.NOT_FOUND,
+      );
+    }
+    return updated;
+  }
+
+  @Post(':id/roles')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission('admin:moderate:user')
+  async assignRole(
+    @Param('id') id: string,
+    @ZodBody(AssignRoleSchema) body: AssignRoleDto,
+    @Req() req: AuthRequest,
+  ) {
+    const userId = this.parseId(id);
+    await this.usersService.assignRoleByAdmin(userId, body.roleId, body.scope, req.user.id);
+    const updated = await this.usersService.findByIdForAdmin(userId);
+    if (!updated) {
+      throw new HttpException(
+        { code: ErrorCode.NOT_FOUND, message: 'User not found' },
+        HttpStatus.NOT_FOUND,
+      );
+    }
+    return updated;
+  }
+
+  @Delete(':id/roles/:roleId')
+  @RequirePermission('admin:moderate:user')
+  async removeRole(
+    @Param('id') id: string,
+    @Param('roleId') roleId: string,
+    @Req() req: AuthRequest,
+  ) {
+    const userId = this.parseId(id);
+    const roleIdBigInt = this.parseId(roleId);
+    await this.usersService.removeRoleByAdmin(userId, roleIdBigInt, req.user.id);
+    const updated = await this.usersService.findByIdForAdmin(userId);
+    if (!updated) {
+      throw new HttpException(
+        { code: ErrorCode.NOT_FOUND, message: 'User not found' },
+        HttpStatus.NOT_FOUND,
+      );
+    }
+    return updated;
+  }
+
+  private parseId(raw: string): bigint {
+    try {
+      return BigInt(raw);
+    } catch {
+      throw new HttpException(
+        { code: ErrorCode.NOT_FOUND, message: 'User not found' },
+        HttpStatus.NOT_FOUND,
+      );
+    }
   }
 }
