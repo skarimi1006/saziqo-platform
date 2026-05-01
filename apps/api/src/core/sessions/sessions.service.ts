@@ -71,6 +71,45 @@ export class SessionsService {
     };
   }
 
+  // SECURITY: Impersonation tokens look like ordinary tokens but carry an
+  // `imp` claim binding them to (a) the actual admin who started this and
+  // (b) the ImpersonationSession row. JwtAuthGuard re-validates the row on
+  // every request, so stopping the impersonation invalidates every token
+  // issued for it before its 30-day refresh expiry.
+  async issueImpersonationTokens(
+    actorUserId: bigint,
+    targetUserId: bigint,
+    impSessionId: bigint,
+    userAgent: string | null,
+    ipAddress: string | null,
+  ): Promise<IssuedTokens> {
+    const { raw, hash } = this.generateRefreshToken();
+    const refreshTtlMs = this.refreshTtlMs();
+
+    const session = await this.prisma.session.create({
+      data: {
+        userId: targetUserId,
+        refreshTokenHash: hash,
+        userAgent,
+        ipAddress,
+        expiresAt: new Date(Date.now() + refreshTtlMs),
+      },
+    });
+
+    const accessToken = await this.signImpersonationAccessToken(
+      targetUserId,
+      actorUserId,
+      impSessionId,
+    );
+
+    return {
+      accessToken,
+      refreshToken: raw,
+      sessionId: session.id,
+      refreshCookie: this.buildCookie(raw, refreshTtlMs),
+    };
+  }
+
   // Atomic rotation. The four-state branch lives inside one transaction:
   //   not found    → SESSION_INVALID
   //   already revoked → SESSION_REPLAY (and revoke ALL active sessions for the user)
@@ -180,6 +219,27 @@ export class SessionsService {
     return new SignJWT({ type: 'access' })
       .setProtectedHeader({ alg: 'HS256' })
       .setSubject(String(userId))
+      .setJti(uuidv4())
+      .setIssuedAt()
+      .setExpirationTime(this.config.get('JWT_EXPIRES_IN'))
+      .sign(secret);
+  }
+
+  private async signImpersonationAccessToken(
+    targetUserId: bigint,
+    actorUserId: bigint,
+    impSessionId: bigint,
+  ): Promise<string> {
+    const secret = new TextEncoder().encode(this.config.get('JWT_SECRET'));
+    return new SignJWT({
+      type: 'access',
+      imp: {
+        actorUserId: String(actorUserId),
+        impSessionId: String(impSessionId),
+      },
+    })
+      .setProtectedHeader({ alg: 'HS256' })
+      .setSubject(String(targetUserId))
       .setJti(uuidv4())
       .setIssuedAt()
       .setExpirationTime(this.config.get('JWT_EXPIRES_IN'))

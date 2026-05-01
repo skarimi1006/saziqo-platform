@@ -8,6 +8,7 @@ import { PinoLoggerModule } from './common/middleware/logger.middleware';
 import { RateLimitGuard } from './common/middleware/rate-limit.middleware';
 import { ConfigModule } from './config/config.module';
 import { HealthModule } from './core/health/health.module';
+import { ImpersonationModule } from './core/impersonation/impersonation.module';
 import { PrismaModule } from './core/prisma/prisma.module';
 import { RbacModule } from './core/rbac/rbac.module';
 import { RedisModule } from './core/redis/redis.module';
@@ -26,6 +27,7 @@ import { UsersModule } from './core/users/users.module';
     RbacModule,
     HealthModule,
     UsersModule,
+    ImpersonationModule,
   ],
   providers: [
     { provide: APP_INTERCEPTOR, useClass: IdempotencyInterceptor },

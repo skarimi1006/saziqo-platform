@@ -73,6 +73,27 @@ model Session {
   @@map("sessions")
 }
 
+// SECURITY: An ImpersonationSession captures a single audit-tracked
+// admin-impersonates-user session (S3). Tokens issued for this session
+// carry an `imp` JWT claim, and the JwtAuthGuard rejects every request
+// once `endedAt` is set. The row is permanent; ending an impersonation
+// only stamps `endedAt`, never deletes — operational accountability.
+model ImpersonationSession {
+  id            BigInt    @id @default(autoincrement())
+  actorUserId   BigInt
+  targetUserId  BigInt
+  sessionId     BigInt?
+  reason        String    @db.VarChar(500)
+  startedAt     DateTime  @default(now())
+  endedAt       DateTime?
+  revokedReason String?   @db.VarChar(500)
+
+  @@index([actorUserId])
+  @@index([targetUserId])
+  @@index([startedAt])
+  @@map("impersonation_sessions")
+}
+
 // ─── RBAC ────────────────────────────────────────────────────────────
 
 model Role {
