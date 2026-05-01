@@ -37,10 +37,21 @@ export class AuditController {
     const { actorUserId, action, resource, resourceId, failed, dateFrom, dateTo, cursor, limit } =
       query;
 
-    const result = await this.auditService.findManyForAdmin(
-      { actorUserId, action, resource, resourceId, failed, dateFrom, dateTo },
-      { cursor, limit },
-    );
+    // Build the filter object with only defined keys — exactOptionalPropertyTypes
+    // rejects explicit undefineds against optional fields.
+    const filters: Parameters<typeof this.auditService.findManyForAdmin>[0] = {};
+    if (actorUserId !== undefined) filters.actorUserId = actorUserId;
+    if (action !== undefined) filters.action = action;
+    if (resource !== undefined) filters.resource = resource;
+    if (resourceId !== undefined) filters.resourceId = resourceId;
+    if (failed !== undefined) filters.failed = failed;
+    if (dateFrom !== undefined) filters.dateFrom = dateFrom;
+    if (dateTo !== undefined) filters.dateTo = dateTo;
+
+    const pagination: Parameters<typeof this.auditService.findManyForAdmin>[1] = { limit };
+    if (cursor !== undefined) pagination.cursor = cursor;
+
+    const result = await this.auditService.findManyForAdmin(filters, pagination);
 
     return {
       data: result.items,

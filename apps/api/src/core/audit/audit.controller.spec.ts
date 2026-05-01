@@ -51,6 +51,7 @@ function makeRow(id: bigint, overrides: Partial<AuditLogWithActor> = {}): AuditL
     resource: 'user',
     resourceId: '5',
     payloadHash: 'abc123',
+    failed: false,
     ipAddress: '127.0.0.1',
     userAgent: 'jest',
     createdAt: new Date('2026-01-15T10:00:00Z'),
