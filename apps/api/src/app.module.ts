@@ -9,6 +9,7 @@ import { PinoLoggerModule } from './common/middleware/logger.middleware';
 import { RateLimitGuard } from './common/middleware/rate-limit.middleware';
 import { ConfigModule } from './config/config.module';
 import { AuditModule } from './core/audit/audit.module';
+import { FilesModule } from './core/files/files.module';
 import { HealthModule } from './core/health/health.module';
 import { ImpersonationModule } from './core/impersonation/impersonation.module';
 import { PrismaModule } from './core/prisma/prisma.module';
@@ -33,6 +34,7 @@ import { UsersModule } from './core/users/users.module';
     RedisModule,
     RbacModule,
     AuditModule,
+    FilesModule,
     HealthModule,
     UsersModule,
     ImpersonationModule,

@@ -56,8 +56,13 @@ export const envSchema = z.object({
   ZARINPAL_SANDBOX: z.coerce.boolean().default(true),
 
   // File storage
-  FILE_STORAGE_PATH: z.string().default('/var/saziqo-platform/files'),
-  FILE_MAX_SIZE_MB: z.coerce.number().int().positive().default(10),
+  // SECURITY: FILE_STORAGE_ROOT is the canonical absolute or relative root
+  // for all uploaded files. Every read/write path is resolved against this
+  // root and rejected if it escapes — so changing it at runtime invalidates
+  // existing files. Default targets prod; dev uses ./tmp/saziqo-files via
+  // .env.example.
+  FILE_STORAGE_ROOT: z.string().default('/var/saziqo-platform/files'),
+  MAX_UPLOAD_SIZE_MB: z.coerce.number().int().positive().default(10),
 
   // CORS — comma-separated list of allowed origins
   CORS_ALLOWED_ORIGINS: z.string().default('http://localhost:3000'),
