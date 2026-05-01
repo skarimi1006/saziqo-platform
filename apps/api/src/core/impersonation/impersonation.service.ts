@@ -2,8 +2,6 @@ import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { ImpersonationSession } from '@prisma/client';
 
 import { ErrorCode } from '../../common/types/response.types';
-import { AUDIT_ACTIONS } from '../audit/actions.catalog';
-import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { IssuedTokens, SessionsService } from '../sessions/sessions.service';
 
@@ -12,12 +10,16 @@ export interface StartImpersonationResult {
   tokens: IssuedTokens;
 }
 
+// CLAUDE: IMPERSONATION_STARTED and IMPERSONATION_ENDED audit rows are
+// produced by the @Audit decorator on ImpersonationController (Phase 6B).
+// We intentionally do NOT call audit.log here — having both layers fire
+// would write two rows per action, only one of which would carry the
+// `request` snapshot the interceptor records.
 @Injectable()
 export class ImpersonationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly sessions: SessionsService,
-    private readonly audit: AuditService,
   ) {}
 
   // SECURITY: Refusing to impersonate any super_admin prevents privilege
@@ -62,17 +64,6 @@ export class ImpersonationService {
       ipAddress,
     );
 
-    await this.audit.log({
-      actorUserId,
-      action: AUDIT_ACTIONS.IMPERSONATION_STARTED,
-      resource: 'user',
-      resourceId: targetUserId,
-      payload: { reason },
-      ipAddress,
-      userAgent,
-      impersonationSessionId: created.id,
-    });
-
     return { impSessionId: created.id, tokens };
   }
 
@@ -98,25 +89,6 @@ export class ImpersonationService {
     const updated = await this.prisma.impersonationSession.update({
       where: { id: impSessionId },
       data: { endedAt },
-    });
-
-    const durationSeconds = Math.max(
-      0,
-      Math.floor((endedAt.getTime() - updated.startedAt.getTime()) / 1000),
-    );
-
-    await this.audit.log({
-      actorUserId: updated.actorUserId,
-      action: AUDIT_ACTIONS.IMPERSONATION_ENDED,
-      resource: 'user',
-      resourceId: updated.targetUserId,
-      payload: {
-        reason: updated.reason,
-        durationSeconds,
-      },
-      ipAddress: null,
-      userAgent: null,
-      impersonationSessionId: updated.id,
     });
 
     return updated;

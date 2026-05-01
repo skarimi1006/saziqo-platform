@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { AuditInterceptor } from './common/interceptors/audit.interceptor';
 import { IdempotencyInterceptor } from './common/interceptors/idempotency.interceptor';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { PinoLoggerModule } from './common/middleware/logger.middleware';
@@ -16,9 +17,14 @@ import { RedisModule } from './core/redis/redis.module';
 import { UsersModule } from './core/users/users.module';
 
 // CLAUDE: APP_INTERCEPTOR providers are applied in declaration order — the
-// first declared is OUTERMOST. We want IdempotencyInterceptor to wrap the
-// already-wrapped { data, meta? } envelope produced by ResponseInterceptor,
-// so Idempotency goes first (outer), Response second (inner).
+// first declared is OUTERMOST. The runtime request flow is therefore:
+//   Audit (outermost) → Idempotency → Response → handler
+// On the response side it reverses, so Response wraps the raw return into
+// { data, meta? }, Idempotency caches that wrapped envelope, and Audit
+// finally observes the wrapped + idempotency-resolved value to write its
+// row. Audit is OUTSIDE Idempotency so cache hits are still audited as
+// attempts (the alternative would create blind spots whenever a client
+// retries with the same Idempotency-Key).
 @Module({
   imports: [
     PinoLoggerModule,
@@ -32,6 +38,7 @@ import { UsersModule } from './core/users/users.module';
     ImpersonationModule,
   ],
   providers: [
+    { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },
     { provide: APP_INTERCEPTOR, useClass: IdempotencyInterceptor },
     { provide: APP_INTERCEPTOR, useClass: ResponseInterceptor },
     { provide: APP_FILTER, useClass: AllExceptionsFilter },

@@ -15,12 +15,14 @@ import { UserStatus } from '@prisma/client';
 import { Request } from 'express';
 import { z } from 'zod';
 
+import { Audit } from '../../common/decorators/audit.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { ZodBody } from '../../common/decorators/zod-body.decorator';
 import { ZodQuery } from '../../common/decorators/zod-query.decorator';
-import { JwtAuthGuard, AuthenticatedUser  } from '../../common/guards/jwt-auth.guard';
+import { JwtAuthGuard, AuthenticatedUser } from '../../common/guards/jwt-auth.guard';
 import { PermissionGuard } from '../../common/guards/permission.guard';
 import { ErrorCode } from '../../common/types/response.types';
+import { AUDIT_ACTIONS } from '../audit/actions.catalog';
 
 import { UpdateUserSchema, UpdateUserDto } from './dto/update-user.dto';
 import { UsersService } from './users.service';
@@ -90,6 +92,7 @@ export class UsersController {
 
   @Patch(':id')
   @RequirePermission('admin:update:user')
+  @Audit({ action: AUDIT_ACTIONS.ADMIN_USER_UPDATE, resource: 'user', resourceIdParam: 'id' })
   async updateUser(
     @Param('id') id: string,
     @ZodBody(UpdateUserSchema) body: UpdateUserDto,
@@ -126,6 +129,7 @@ export class UsersController {
   @Post(':id/roles')
   @HttpCode(HttpStatus.OK)
   @RequirePermission('admin:moderate:user')
+  @Audit({ action: AUDIT_ACTIONS.ADMIN_ROLE_ASSIGNED, resource: 'user', resourceIdParam: 'id' })
   async assignRole(
     @Param('id') id: string,
     @ZodBody(AssignRoleSchema) body: AssignRoleDto,
@@ -145,6 +149,7 @@ export class UsersController {
 
   @Delete(':id/roles/:roleId')
   @RequirePermission('admin:moderate:user')
+  @Audit({ action: AUDIT_ACTIONS.ADMIN_ROLE_REMOVED, resource: 'user', resourceIdParam: 'id' })
   async removeRole(
     @Param('id') id: string,
     @Param('roleId') roleId: string,

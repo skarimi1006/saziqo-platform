@@ -13,6 +13,7 @@ import { Request, Response } from 'express';
 import { z } from 'zod';
 
 import { AdminOnly } from '../../common/decorators/admin-only.decorator';
+import { Audit } from '../../common/decorators/audit.decorator';
 import { Idempotent } from '../../common/decorators/idempotent.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { ZodBody } from '../../common/decorators/zod-body.decorator';
@@ -24,6 +25,7 @@ import {
 } from '../../common/guards/jwt-auth.guard';
 import { PermissionGuard } from '../../common/guards/permission.guard';
 import { ErrorCode } from '../../common/types/response.types';
+import { AUDIT_ACTIONS } from '../audit/actions.catalog';
 
 import { ImpersonationService } from './impersonation.service';
 
@@ -53,6 +55,12 @@ export class ImpersonationController {
   @HttpCode(HttpStatus.OK)
   @AdminOnly({ confirmHeader: true, permission: 'admin:impersonate:user' })
   @Idempotent()
+  @Audit({
+    action: AUDIT_ACTIONS.IMPERSONATION_STARTED,
+    resource: 'user',
+    resourceIdParam: 'targetUserId',
+    resourceIdSource: 'body',
+  })
   async start(
     @ZodBody(StartImpersonationSchema) body: StartImpersonationDto,
     @Req() req: AuthRequest,
@@ -89,6 +97,12 @@ export class ImpersonationController {
 
   @Post('stop')
   @HttpCode(HttpStatus.OK)
+  @Audit({
+    action: AUDIT_ACTIONS.IMPERSONATION_ENDED,
+    resource: 'user',
+    resourceIdParam: 'impSessionId',
+    resourceIdSource: 'response',
+  })
   async stop(@Req() req: AuthRequest, @Res({ passthrough: true }) res: Response) {
     if (!req.impersonation) {
       throw new HttpException(

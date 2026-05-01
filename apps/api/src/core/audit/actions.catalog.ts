@@ -4,6 +4,11 @@
 export const AUDIT_ACTIONS = {
   LOGIN_SUCCESS: 'LOGIN_SUCCESS',
   SIGNUP_SUCCESS: 'SIGNUP_SUCCESS',
+  // AUTH_OTP_VERIFY is the declarative-decorator action for /auth/otp/verify;
+  // the payload's `justCreated` discriminator distinguishes signup vs login
+  // when readers prefer the one-row-per-attempt convention.
+  AUTH_OTP_VERIFY: 'AUTH_OTP_VERIFY',
+  SESSION_REFRESHED: 'SESSION_REFRESHED',
   LOGOUT: 'LOGOUT',
   PROFILE_COMPLETED: 'PROFILE_COMPLETED',
   SESSION_REVOKED: 'SESSION_REVOKED',
