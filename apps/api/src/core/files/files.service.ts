@@ -5,6 +5,7 @@ import { fromBuffer as fileTypeFromBuffer } from 'file-type';
 import { ErrorCode } from '../../common/types/response.types';
 import { ConfigService } from '../../config/config.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { PermissionsService } from '../rbac/permissions.service';
 
 import { FILE_STORE, FileStore } from './file-store.interface';
 import {
@@ -14,6 +15,18 @@ import {
   mimesMatch,
 } from './mime-policy';
 import { sanitizeSvg } from './svg-sanitizer';
+
+// Permission code that lets an admin read any file regardless of ownership.
+// Defined in permissions.catalog.ts; copied here so the service does not
+// depend on a barrel import for a single string.
+const ADMIN_READ_ANY_FILE = 'admin:read:any_file';
+
+export interface FileDownloadStream {
+  stream: NodeJS.ReadableStream;
+  mimeType: string;
+  originalName: string;
+  size: bigint;
+}
 
 export interface UploadInput {
   buffer: Buffer;
@@ -36,6 +49,7 @@ export class FilesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly permissions: PermissionsService,
     @Inject(FILE_STORE) private readonly fileStore: FileStore,
   ) {}
 
@@ -162,6 +176,56 @@ export class FilesService {
       where: { id },
       data: { deletedAt: new Date() },
     });
+  }
+
+  // Resolves a File row for read access by `currentUserId`. Owner always
+  // sees their own row; everyone else needs `admin:read:any_file`. Soft-
+  // deleted rows produce 410 GONE so callers can distinguish "this used to
+  // exist" from "this never existed" — for non-owners with no admin
+  // permission we still return 404 to avoid id-probe leaks.
+  async findReadableById(id: bigint, currentUserId: bigint): Promise<File> {
+    const file = await this.prisma.file.findUnique({ where: { id } });
+    if (!file) {
+      throw new HttpException(
+        { code: ErrorCode.NOT_FOUND, message: 'File not found' },
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    const isOwner = file.ownerUserId === currentUserId;
+    const hasAdminAccess = isOwner
+      ? false
+      : await this.permissions.userHasPermission(currentUserId, ADMIN_READ_ANY_FILE);
+
+    if (!isOwner && !hasAdminAccess) {
+      // 404 (not 403) so non-admin users cannot probe for valid file ids.
+      throw new HttpException(
+        { code: ErrorCode.NOT_FOUND, message: 'File not found' },
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    if (file.deletedAt !== null) {
+      // The caller is allowed to know about this file (owner or admin); we
+      // surface a 410 so they understand it was deleted, not missing.
+      throw new HttpException(
+        { code: ErrorCode.GONE, message: 'File has been deleted' },
+        HttpStatus.GONE,
+      );
+    }
+
+    return file;
+  }
+
+  async streamForDownload(id: bigint, currentUserId: bigint): Promise<FileDownloadStream> {
+    const file = await this.findReadableById(id, currentUserId);
+    const stream = await this.fileStore.get(file.path);
+    return {
+      stream,
+      mimeType: file.mimeType,
+      originalName: file.originalName,
+      size: file.size,
+    };
   }
 
   // SECURITY: Strips <script>, <foreignObject>, on* event handlers, and

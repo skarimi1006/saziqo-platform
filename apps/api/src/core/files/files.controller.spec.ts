@@ -16,6 +16,7 @@ import { ResponseInterceptor } from '../../common/interceptors/response.intercep
 import { ErrorCode } from '../../common/types/response.types';
 import { ConfigService } from '../../config/config.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { PermissionsService } from '../rbac/permissions.service';
 
 import { FILE_STORE } from './file-store.interface';
 import { FilesController } from './files.controller';
@@ -104,7 +105,10 @@ function makeFilesServiceFromRealStore(
     },
   } as unknown as ConfigService;
 
-  return new FilesService(prisma as unknown as PrismaService, config, store);
+  const permissions = {
+    userHasPermission: jest.fn().mockResolvedValue(false),
+  } as unknown as PermissionsService;
+  return new FilesService(prisma as unknown as PrismaService, config, permissions, store);
 }
 
 describe('FilesController (POST /files/upload)', () => {

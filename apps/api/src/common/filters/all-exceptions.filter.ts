@@ -76,6 +76,8 @@ function mapHttpToCode(status: number): string {
       return ErrorCode.NOT_FOUND;
     case HttpStatus.CONFLICT:
       return ErrorCode.CONFLICT;
+    case HttpStatus.GONE:
+      return ErrorCode.GONE;
     case HttpStatus.TOO_MANY_REQUESTS:
       return ErrorCode.RATE_LIMITED;
     default:

@@ -31,6 +31,7 @@ export enum ErrorCode {
   MIME_NOT_ALLOWED = 'MIME_NOT_ALLOWED',
   MIME_MISMATCH = 'MIME_MISMATCH',
   SVG_UNSAFE_CONTENT = 'SVG_UNSAFE_CONTENT',
+  GONE = 'GONE',
 }
 
 export interface ApiPagination {
