@@ -289,4 +289,87 @@ describe('LedgerService', () => {
       expect(page.nextCursor).toBeNull();
     });
   });
+
+  // ──────── reconciliationReport ────────
+
+  describe('reconciliationReport', () => {
+    it('returns OK status for wallets with matching balances', async () => {
+      mockPrisma.$queryRaw.mockResolvedValue([
+        { walletId: 1n, userId: 10n, storedBalance: 1000n, computedBalance: 1000n },
+        { walletId: 2n, userId: 20n, storedBalance: 500n, computedBalance: 500n },
+      ]);
+
+      const report = await service.reconciliationReport();
+
+      expect(report.items).toHaveLength(2);
+      expect(report.items.every((r) => r.status === 'OK')).toBe(true);
+      expect(report.items.every((r) => r.drift === 0n)).toBe(true);
+      expect(report.summary.walletsWithDrift).toBe(0);
+      expect(report.summary.totalWallets).toBe(2);
+      expect(report.summary.totalStoredBalance).toBe(1500n);
+    });
+
+    it('returns DRIFT status for tampered wallet balance', async () => {
+      mockPrisma.$queryRaw.mockResolvedValue([
+        { walletId: 1n, userId: 10n, storedBalance: 9999n, computedBalance: 1000n },
+        { walletId: 2n, userId: 20n, storedBalance: 500n, computedBalance: 500n },
+      ]);
+
+      const report = await service.reconciliationReport();
+
+      const drifted = report.items.find((r) => r.walletId === 1n)!;
+      expect(drifted.status).toBe('DRIFT');
+      expect(drifted.drift).toBe(8999n);
+      expect(report.summary.walletsWithDrift).toBe(1);
+    });
+
+    it('sets cappedAt when results exceed limit', async () => {
+      const rows = Array.from({ length: 11 }, (_, i) => ({
+        walletId: BigInt(i + 1),
+        userId: BigInt(i + 100),
+        storedBalance: 0n,
+        computedBalance: 0n,
+      }));
+      mockPrisma.$queryRaw.mockResolvedValue(rows);
+
+      const report = await service.reconciliationReport({ limit: 10 });
+
+      expect(report.items).toHaveLength(10);
+      expect(report.summary.cappedAt).toBe(10);
+    });
+
+    it('sets cappedAt to null when all wallets fit', async () => {
+      mockPrisma.$queryRaw.mockResolvedValue([
+        { walletId: 1n, userId: 1n, storedBalance: 0n, computedBalance: 0n },
+      ]);
+
+      const report = await service.reconciliationReport({ limit: 10 });
+      expect(report.summary.cappedAt).toBeNull();
+    });
+  });
+
+  // ──────── aggregates ────────
+
+  describe('aggregates', () => {
+    it('returns daily aggregates with netFlow computed', async () => {
+      const now = new Date();
+      mockPrisma.$queryRaw.mockResolvedValue([
+        { date: now, credits: 5000n, debits: 2000n, entryCount: 10n },
+        { date: new Date(now.getTime() - 86400000), credits: 3000n, debits: 1000n, entryCount: 5n },
+      ]);
+
+      const report = await service.aggregates({ days: 7 });
+
+      expect(report.data).toHaveLength(2);
+      expect(report.data[0]!.netFlow).toBe(3000n);
+      expect(report.data[1]!.netFlow).toBe(2000n);
+      expect(report.data[0]!.entryCount).toBe(10n);
+    });
+
+    it('defaults to 30 days when no option given', async () => {
+      mockPrisma.$queryRaw.mockResolvedValue([]);
+      await service.aggregates();
+      expect(mockPrisma.$queryRaw).toHaveBeenCalled();
+    });
+  });
 });

@@ -42,6 +42,36 @@ export interface LedgerPage {
   hasMore: boolean;
 }
 
+export interface ReconciliationRow {
+  walletId: bigint;
+  userId: bigint;
+  storedBalance: bigint;
+  computedBalance: bigint;
+  drift: bigint;
+  status: 'OK' | 'DRIFT';
+}
+
+export interface ReconciliationReport {
+  items: ReconciliationRow[];
+  summary: {
+    totalWallets: number;
+    walletsWithDrift: number;
+    totalStoredBalance: bigint;
+    totalComputedBalance: bigint;
+    cappedAt: number | null;
+  };
+}
+
+export interface AggregatesReport {
+  data: {
+    date: Date;
+    credits: bigint;
+    debits: bigint;
+    netFlow: bigint;
+    entryCount: bigint;
+  }[];
+}
+
 @Injectable()
 export class LedgerService {
   constructor(
@@ -330,6 +360,96 @@ export class LedgerService {
     const nextCursor = hasMore && last ? last.id : null;
 
     return { items, nextCursor, hasMore };
+  }
+
+  async reconciliationReport(opts: { limit?: number } = {}): Promise<ReconciliationReport> {
+    const limit = Math.min(opts.limit ?? 10000, 10000);
+
+    const rows = await this.prisma.$queryRaw<
+      {
+        walletId: bigint;
+        userId: bigint;
+        storedBalance: bigint;
+        computedBalance: bigint;
+      }[]
+    >`
+      SELECT
+        w.id                                                        AS "walletId",
+        w."userId"                                                  AS "userId",
+        w.balance                                                   AS "storedBalance",
+        COALESCE(
+          SUM(CASE WHEN le.kind = 'CREDIT' THEN le.amount
+                   WHEN le.kind = 'DEBIT'  THEN -le.amount END),
+          0
+        )::BIGINT                                                   AS "computedBalance"
+      FROM wallets w
+      LEFT JOIN ledger_entries le ON le."walletId" = w.id
+      GROUP BY w.id
+      LIMIT ${limit + 1}
+    `;
+
+    const exceededCap = rows.length > limit;
+    const items = exceededCap ? rows.slice(0, limit) : rows;
+
+    const result: ReconciliationRow[] = items.map((r) => {
+      const drift = r.storedBalance - r.computedBalance;
+      return {
+        walletId: r.walletId,
+        userId: r.userId,
+        storedBalance: r.storedBalance,
+        computedBalance: r.computedBalance,
+        drift,
+        status: drift === 0n ? 'OK' : 'DRIFT',
+      };
+    });
+
+    const totalStoredBalance = result.reduce((acc, r) => acc + r.storedBalance, 0n);
+    const totalComputedBalance = result.reduce((acc, r) => acc + r.computedBalance, 0n);
+    const walletsWithDrift = result.filter((r) => r.status === 'DRIFT').length;
+
+    return {
+      items: result,
+      summary: {
+        totalWallets: result.length,
+        walletsWithDrift,
+        totalStoredBalance,
+        totalComputedBalance,
+        cappedAt: exceededCap ? limit : null,
+      },
+    };
+  }
+
+  async aggregates(opts: { days?: number } = {}): Promise<AggregatesReport> {
+    const days = Math.min(opts.days ?? 30, 365);
+
+    const rows = await this.prisma.$queryRaw<
+      {
+        date: Date;
+        credits: bigint;
+        debits: bigint;
+        entryCount: bigint;
+      }[]
+    >`
+      SELECT
+        DATE_TRUNC('day', created_at)                              AS date,
+        SUM(CASE WHEN kind = 'CREDIT' THEN amount ELSE 0 END)::BIGINT AS credits,
+        SUM(CASE WHEN kind = 'DEBIT'  THEN amount ELSE 0 END)::BIGINT AS debits,
+        COUNT(*)::BIGINT                                               AS "entryCount"
+      FROM ledger_entries
+      WHERE created_at >= NOW() - (${days} || ' days')::INTERVAL
+      GROUP BY DATE_TRUNC('day', created_at)
+      ORDER BY date DESC
+    `;
+
+    const data = rows.map((r) => ({
+      date: r.date,
+      credits: r.credits,
+      debits: r.debits,
+      netFlow: r.credits - r.debits,
+      entryCount: r.entryCount,
+    }));
+
+    return { data };
   }
 
   // ──────── private helpers ────────
