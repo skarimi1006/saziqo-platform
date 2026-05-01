@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionGuard } from '../../common/guards/permission.guard';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { PrismaModule } from '../prisma/prisma.module';
 
 import { UsersController } from './users.controller';
@@ -13,7 +14,7 @@ import { UsersService } from './users.service';
 // readers and keep this module self-describing.
 // RedisModule, RbacModule, ConfigModule are @Global — no explicit import needed.
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, NotificationsModule],
   controllers: [UsersController],
   providers: [UsersService, UsersRepository, JwtAuthGuard, PermissionGuard],
   exports: [UsersService],

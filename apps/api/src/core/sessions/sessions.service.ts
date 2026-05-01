@@ -10,6 +10,8 @@ import { ErrorCode } from '../../common/types/response.types';
 import { ConfigService } from '../../config/config.service';
 import { AUDIT_ACTIONS } from '../audit/actions.catalog';
 import { AuditService } from '../audit/audit.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NOTIFICATION_TYPES } from '../notifications/types.catalog';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface RefreshCookie {
@@ -40,6 +42,7 @@ export class SessionsService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly audit: AuditService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // SECURITY: Issues access + refresh pair. Refresh token is generated as
@@ -204,6 +207,38 @@ export class SessionsService {
       where: { id: sessionId },
       data: { revokedAt: new Date() },
     });
+  }
+
+  // Ownership-checked revocation for user-facing endpoints.
+  // Dispatches SESSION_REVOKED IN_APP notification only for admin-initiated
+  // revocations — user-initiated self-revocation does not notify.
+  async revokeOne(
+    sessionId: bigint,
+    userId: bigint,
+    opts: { adminInitiated?: boolean } = {},
+  ): Promise<void> {
+    const session = await this.prisma.session.findUnique({
+      where: { id: sessionId },
+      select: { userId: true, userAgent: true },
+    });
+    if (!session || session.userId !== userId) {
+      throw new HttpException(
+        { code: ErrorCode.NOT_FOUND, message: 'Session not found' },
+        HttpStatus.NOT_FOUND,
+      );
+    }
+    await this.prisma.session.update({
+      where: { id: sessionId },
+      data: { revokedAt: new Date() },
+    });
+    if (opts.adminInitiated === true) {
+      await this.notifications.dispatch({
+        userId,
+        type: NOTIFICATION_TYPES.SESSION_REVOKED,
+        payload: { userAgent: session.userAgent ?? 'ناشناس' },
+        channels: ['IN_APP'],
+      });
+    }
   }
 
   async revokeAllForUser(userId: bigint): Promise<number> {

@@ -9,6 +9,7 @@ import { jwtVerify } from 'jose';
 import { ErrorCode } from '../../common/types/response.types';
 import { ConfigService } from '../../config/config.service';
 import { AuditService } from '../audit/audit.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 import { SessionsService } from './sessions.service';
@@ -33,6 +34,7 @@ describe('SessionsService', () => {
   let mockPrisma: MockPrisma;
   let mockConfig: { get: jest.Mock; isProduction: boolean };
   let mockAudit: { log: jest.Mock };
+  let mockNotifications: { dispatch: jest.Mock };
 
   beforeEach(async () => {
     mockPrisma = {
@@ -61,6 +63,9 @@ describe('SessionsService', () => {
     };
 
     mockAudit = { log: jest.fn().mockResolvedValue(undefined) };
+    mockNotifications = {
+      dispatch: jest.fn().mockResolvedValue({ dispatched: ['IN_APP'], failures: [] }),
+    };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -68,6 +73,7 @@ describe('SessionsService', () => {
         { provide: PrismaService, useValue: mockPrisma },
         { provide: ConfigService, useValue: mockConfig },
         { provide: AuditService, useValue: mockAudit },
+        { provide: NotificationsService, useValue: mockNotifications },
       ],
     }).compile();
 
@@ -294,6 +300,55 @@ describe('SessionsService', () => {
           expiresAt: { gt: expect.any(Date) },
         },
         orderBy: { createdAt: 'desc' },
+      });
+    });
+  });
+
+  // ──────── revokeOne ────────
+
+  describe('revokeOne', () => {
+    it('throws NOT_FOUND when session does not belong to the user', async () => {
+      mockPrisma.session.findUnique.mockResolvedValue({ userId: 99n, userAgent: 'curl' });
+
+      await expect(service.revokeOne(10n, 1n)).rejects.toMatchObject({
+        response: { code: ErrorCode.NOT_FOUND },
+        status: HttpStatus.NOT_FOUND,
+      });
+      expect(mockPrisma.session.update).not.toHaveBeenCalled();
+    });
+
+    it('throws NOT_FOUND when session does not exist', async () => {
+      mockPrisma.session.findUnique.mockResolvedValue(null);
+
+      await expect(service.revokeOne(10n, 1n)).rejects.toMatchObject({
+        response: { code: ErrorCode.NOT_FOUND },
+      });
+    });
+
+    it('revokes the session without dispatching notification when user-initiated', async () => {
+      mockPrisma.session.findUnique.mockResolvedValue({ userId: 1n, userAgent: 'Chrome/120' });
+      mockPrisma.session.update.mockResolvedValue({});
+
+      await service.revokeOne(10n, 1n);
+
+      expect(mockPrisma.session.update).toHaveBeenCalledWith({
+        where: { id: 10n },
+        data: { revokedAt: expect.any(Date) },
+      });
+      expect(mockNotifications.dispatch).not.toHaveBeenCalled();
+    });
+
+    it('dispatches SESSION_REVOKED IN_APP when admin-initiated', async () => {
+      mockPrisma.session.findUnique.mockResolvedValue({ userId: 5n, userAgent: 'Firefox/121' });
+      mockPrisma.session.update.mockResolvedValue({});
+
+      await service.revokeOne(10n, 5n, { adminInitiated: true });
+
+      expect(mockNotifications.dispatch).toHaveBeenCalledWith({
+        userId: 5n,
+        type: 'SESSION_REVOKED',
+        payload: { userAgent: 'Firefox/121' },
+        channels: ['IN_APP'],
       });
     });
   });

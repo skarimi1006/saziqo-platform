@@ -6,7 +6,7 @@ import { EmailService } from '../email/email.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SmsService } from '../sms/sms.service';
 
-import { NotificationsService } from './notifications.service';
+import { NotificationRow, NotificationsService } from './notifications.service';
 import { NOTIFICATION_TYPES } from './types.catalog';
 
 interface MockPrisma {
@@ -240,6 +240,114 @@ describe('NotificationsService', () => {
       expect(page.items).toHaveLength(2);
       expect(page.hasMore).toBe(false);
       expect(page.nextCursor).toBeNull();
+    });
+  });
+
+  describe('dispatch — template-based routing', () => {
+    it('returns empty result when no template is defined for the type', async () => {
+      const result = await service.dispatch({
+        userId,
+        type: 'UNKNOWN_TYPE',
+        payload: {},
+        channels: ['IN_APP', 'SMS'],
+      });
+
+      expect(result.dispatched).toHaveLength(0);
+      expect(result.failures).toHaveLength(0);
+      expect(prisma.notification.create).not.toHaveBeenCalled();
+      expect(smsSend).not.toHaveBeenCalled();
+    });
+
+    it('skips IN_APP channel with warning when template has no inApp section', async () => {
+      // OTP_SENT has sms only — no inApp section
+      const result = await service.dispatch({
+        userId,
+        type: NOTIFICATION_TYPES.OTP_SENT,
+        payload: { code: '111111' },
+        channels: ['IN_APP'],
+      });
+
+      expect(result.dispatched).not.toContain('IN_APP');
+      expect(prisma.notification.create).not.toHaveBeenCalled();
+    });
+
+    it('renders PAYMENT_SUCCEEDED body with amount and formats thousand separators', async () => {
+      await service.dispatch({
+        userId,
+        type: NOTIFICATION_TYPES.PAYMENT_SUCCEEDED,
+        payload: { amount: 50000, reference: 'ABC123' },
+        channels: ['SMS'],
+      });
+
+      expect(smsSend).toHaveBeenCalledWith('+989100000001', expect.stringContaining('50,000'));
+    });
+
+    it('renders PAYOUT_REJECTED body with reason variable', async () => {
+      await service.dispatch({
+        userId,
+        type: NOTIFICATION_TYPES.PAYOUT_REJECTED,
+        payload: { amount: 100000, reason: 'مدارک ناقص' },
+        channels: ['IN_APP'],
+      });
+
+      expect(prisma.notification.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            type: 'PAYOUT_REJECTED',
+            payload: { amount: 100000, reason: 'مدارک ناقص' },
+          }),
+        }),
+      );
+    });
+  });
+
+  describe('renderForUser', () => {
+    const baseRow: NotificationRow = {
+      id: 1n,
+      userId: 1n,
+      channel: NotificationChannel.IN_APP,
+      type: NOTIFICATION_TYPES.PAYMENT_SUCCEEDED,
+      payload: { amount: 75000, reference: 'REF999' },
+      readAt: null,
+      createdAt: new Date('2026-01-01'),
+    };
+
+    it('returns renderedTitle and renderedBody from template', () => {
+      const view = service.renderForUser(baseRow);
+
+      expect(view.renderedTitle).toBe('پرداخت موفق');
+      expect(view.renderedBody).toContain('75,000');
+      expect(view.renderedBody).toContain('تومان');
+    });
+
+    it('falls back to type string when no inApp template is defined', () => {
+      const view = service.renderForUser({ ...baseRow, type: 'UNKNOWN_TYPE' });
+
+      expect(view.renderedTitle).toBe('UNKNOWN_TYPE');
+      expect(view.renderedBody).toBe('UNKNOWN_TYPE');
+    });
+
+    it('renders IMPERSONATION_NOTICE body with variables', () => {
+      const view = service.renderForUser({
+        ...baseRow,
+        type: NOTIFICATION_TYPES.IMPERSONATION_NOTICE,
+        payload: {
+          startedAt: '2026-01-15T10:00:00.000Z',
+          durationMinutes: 5,
+          reason: 'بررسی مشکل',
+        },
+      });
+
+      expect(view.renderedTitle).toBe('دسترسی پشتیبانی به حساب');
+      expect(view.renderedBody).toContain('5');
+      expect(view.renderedBody).toContain('بررسی مشکل');
+    });
+
+    it('omits channel and userId from the view shape', () => {
+      const view = service.renderForUser(baseRow);
+
+      expect(view).not.toHaveProperty('channel');
+      expect(view).not.toHaveProperty('userId');
     });
   });
 });

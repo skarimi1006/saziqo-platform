@@ -6,6 +6,7 @@ import { EmailService } from '../email/email.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SmsService } from '../sms/sms.service';
 
+import { NOTIFICATION_TEMPLATES } from './templates.catalog';
 import { NON_PERSISTENT_TYPES } from './types.catalog';
 
 export type NotificationChannelInput = 'IN_APP' | 'SMS' | 'EMAIL';
@@ -55,7 +56,8 @@ export interface NotificationView {
   payload: unknown;
   readAt: Date | null;
   createdAt: Date;
-  renderedText: string;
+  renderedTitle: string;
+  renderedBody: string;
 }
 
 @Injectable()
@@ -73,6 +75,12 @@ export class NotificationsService {
     const dispatched: NotificationChannelInput[] = [];
     const failures: DispatchFailure[] = [];
 
+    const template = NOTIFICATION_TEMPLATES[type];
+    if (!template) {
+      this.logger.warn(`No template defined for notification type: ${type} — skipping`);
+      return { dispatched, failures };
+    }
+
     for (const channel of channels) {
       try {
         if (channel === 'IN_APP') {
@@ -82,7 +90,10 @@ export class NotificationsService {
             this.logger.warn(`Skipping IN_APP row for non-persistent type: ${type}`);
             continue;
           }
-
+          if (!template.inApp) {
+            this.logger.warn(`No IN_APP template for type: ${type} — skipping`);
+            continue;
+          }
           await this.prisma.notification.create({
             data: {
               userId,
@@ -93,45 +104,38 @@ export class NotificationsService {
           });
           dispatched.push('IN_APP');
         } else if (channel === 'SMS') {
+          if (!template.sms) {
+            this.logger.warn(`No SMS template for type: ${type} — skipping`);
+            continue;
+          }
           const user = await this.prisma.user.findUnique({
             where: { id: userId },
             select: { phone: true },
           });
-
           if (!user) {
             failures.push({ channel: 'SMS', error: 'User not found' });
             continue;
           }
-
-          const message = this.renderSmsMessage(type, payload);
-          if (!message) {
-            this.logger.warn(`No SMS template for type: ${type} — skipping SMS channel`);
-            continue;
-          }
-
+          const message = template.sms(payload);
           await this.smsService.send(user.phone, message);
           dispatched.push('SMS');
         } else if (channel === 'EMAIL') {
+          if (!template.email) {
+            this.logger.warn(`No EMAIL template for type: ${type} — skipping`);
+            continue;
+          }
           const user = await this.prisma.user.findUnique({
             where: { id: userId },
             select: { email: true },
           });
-
           if (!user?.email) {
             this.logger.warn(`User ${userId.toString()} has no email — skipping EMAIL channel`);
             continue;
           }
-
-          const emailContent = this.renderEmailContent(type, payload);
-          if (!emailContent) {
-            this.logger.warn(`No EMAIL template for type: ${type} — skipping EMAIL channel`);
-            continue;
-          }
-
           await this.emailService.send({
             to: user.email,
-            subject: emailContent.subject,
-            textBody: emailContent.textBody,
+            subject: template.email.subject,
+            textBody: template.email.textBody(payload),
           });
           dispatched.push('EMAIL');
         }
@@ -142,9 +146,6 @@ export class NotificationsService {
           err instanceof Error ? err.stack : undefined,
         );
         failures.push({ channel, error: message });
-
-        // SMS / EMAIL failures must not block IN_APP which may be processed
-        // later in the same loop. We continue rather than re-throw.
       }
     }
 
@@ -164,7 +165,6 @@ export class NotificationsService {
       );
     }
 
-    // Idempotent — do nothing if already read
     if (notification.readAt !== null) {
       return;
     }
@@ -205,16 +205,33 @@ export class NotificationsService {
     });
   }
 
-  // Returns notification row enriched with rendered Persian text.
-  // Placeholder rendering per type — replaced by NOTIFICATION_TEMPLATES in Phase 8D.
+  // Returns notification row enriched with rendered Persian title and body
+  // using the NOTIFICATION_TEMPLATES catalog. Falls back to raw type string
+  // when no inApp template is defined (should not happen for stored rows).
   renderForUser(notification: NotificationRow): NotificationView {
+    const template = NOTIFICATION_TEMPLATES[notification.type];
+    const payload = notification.payload as Record<string, unknown>;
+
+    if (template?.inApp) {
+      return {
+        id: notification.id,
+        type: notification.type,
+        payload: notification.payload,
+        readAt: notification.readAt,
+        createdAt: notification.createdAt,
+        renderedTitle: template.inApp.title,
+        renderedBody: template.inApp.body(payload),
+      };
+    }
+
     return {
       id: notification.id,
       type: notification.type,
       payload: notification.payload,
       readAt: notification.readAt,
       createdAt: notification.createdAt,
-      renderedText: this.renderInAppText(notification.type),
+      renderedTitle: notification.type,
+      renderedBody: notification.type,
     };
   }
 
@@ -244,59 +261,5 @@ export class NotificationsService {
     const nextCursor = hasMore && last ? last.id : null;
 
     return { items, nextCursor, hasMore };
-  }
-
-  // Minimal SMS templates for Phase 8A — replaced by full catalog in Phase 8D.
-  private renderSmsMessage(type: string, payload: Record<string, unknown>): string | null {
-    switch (type) {
-      case 'OTP_SENT':
-        return `کد تایید سازیکو: ${String(payload['code'])}\nاین کد تا ۲ دقیقه معتبر است.`;
-      case 'PAYMENT_SUCCEEDED':
-        return `سازیکو: پرداخت ${String(payload['amount'])} تومان تأیید شد. کد پیگیری: ${String(payload['reference'] ?? '')}`;
-      default:
-        return null;
-    }
-  }
-
-  // Placeholder IN_APP text per type — Phase 8D replaces with variable-interpolated catalog.
-  private renderInAppText(type: string): string {
-    switch (type) {
-      case 'PROFILE_COMPLETED':
-        return 'پروفایل شما با موفقیت تکمیل شد.';
-      case 'SESSION_REVOKED':
-        return 'یک نشست شما لغو شد.';
-      case 'IMPERSONATION_NOTICE':
-        return 'پشتیبانی سازیکو به حساب شما دسترسی داشت.';
-      case 'PAYMENT_SUCCEEDED':
-        return 'پرداخت شما با موفقیت انجام شد.';
-      case 'PAYMENT_FAILED':
-        return 'پرداخت ناموفق بود.';
-      case 'WALLET_CREDITED':
-        return 'موجودی کیف پول شما افزایش یافت.';
-      case 'WALLET_DEBITED':
-        return 'موجودی کیف پول شما کاهش یافت.';
-      case 'PAYOUT_REQUESTED':
-        return 'درخواست تسویه ثبت شد.';
-      case 'PAYOUT_APPROVED':
-        return 'تسویه شما تأیید شد.';
-      case 'PAYOUT_REJECTED':
-        return 'درخواست تسویه رد شد.';
-      default:
-        return type;
-    }
-  }
-
-  private renderEmailContent(
-    type: string,
-    payload: Record<string, unknown>,
-  ): { subject: string; textBody: string } | null {
-    // Notification type names map to email template keys by lowercasing
-    // (e.g. PAYMENT_SUCCEEDED → payment_succeeded). Types with no matching
-    // email template return null and the EMAIL channel is silently skipped.
-    try {
-      return this.emailService.render(type.toLowerCase(), payload);
-    } catch {
-      return null;
-    }
   }
 }

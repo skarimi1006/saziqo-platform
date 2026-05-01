@@ -5,6 +5,7 @@ import { UserStatus } from '@prisma/client';
 import { ErrorCode } from '../../common/types/response.types';
 import { ConfigService } from '../../config/config.service';
 import { AuditService } from '../audit/audit.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PermissionsService } from '../rbac/permissions.service';
 import { RedisService } from '../redis/redis.service';
 
@@ -36,6 +37,7 @@ describe('UsersService', () => {
   >;
   let mockConfig: { get: jest.Mock };
   let mockAudit: { log: jest.Mock };
+  let mockNotifications: { dispatch: jest.Mock };
 
   beforeEach(async () => {
     mockClient = {
@@ -65,6 +67,9 @@ describe('UsersService', () => {
       }),
     };
     mockAudit = { log: jest.fn().mockResolvedValue(undefined) };
+    mockNotifications = {
+      dispatch: jest.fn().mockResolvedValue({ dispatched: ['IN_APP'], failures: [] }),
+    };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -74,6 +79,7 @@ describe('UsersService', () => {
         { provide: PermissionsService, useValue: mockPermissions },
         { provide: ConfigService, useValue: mockConfig },
         { provide: AuditService, useValue: mockAudit },
+        { provide: NotificationsService, useValue: mockNotifications },
       ],
     }).compile();
 
@@ -200,6 +206,24 @@ describe('UsersService', () => {
           }),
         }),
       );
+    });
+
+    it('dispatches PROFILE_COMPLETED in-app notification after profile is saved', async () => {
+      mockClient.user.update.mockResolvedValue({ id: 1n, status: UserStatus.ACTIVE });
+      const dto = {
+        firstName: 'علی',
+        lastName: 'احمدی',
+        nationalId: '0123456789',
+        email: 'ali@example.com',
+      };
+      await service.completeProfile(1n, dto);
+
+      expect(mockNotifications.dispatch).toHaveBeenCalledWith({
+        userId: 1n,
+        type: 'PROFILE_COMPLETED',
+        payload: {},
+        channels: ['IN_APP'],
+      });
     });
   });
 

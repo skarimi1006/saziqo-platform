@@ -5,6 +5,8 @@ import { ErrorCode } from '../../common/types/response.types';
 import { ConfigService } from '../../config/config.service';
 import { AUDIT_ACTIONS } from '../audit/actions.catalog';
 import { AuditService } from '../audit/audit.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NOTIFICATION_TYPES } from '../notifications/types.catalog';
 import { PermissionsService } from '../rbac/permissions.service';
 import { RedisService } from '../redis/redis.service';
 
@@ -71,6 +73,7 @@ export class UsersService {
     private readonly permissions: PermissionsService,
     private readonly config: ConfigService,
     private readonly audit: AuditService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // ──────── Reads (use repo.read() for future read-replica support) ────────
@@ -205,6 +208,13 @@ export class UsersService {
       },
       ipAddress: null,
       userAgent: null,
+    });
+
+    await this.notifications.dispatch({
+      userId: id,
+      type: NOTIFICATION_TYPES.PROFILE_COMPLETED,
+      payload: {},
+      channels: ['IN_APP'],
     });
 
     return updated;

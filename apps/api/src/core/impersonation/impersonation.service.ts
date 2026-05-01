@@ -2,6 +2,8 @@ import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { ImpersonationSession } from '@prisma/client';
 
 import { ErrorCode } from '../../common/types/response.types';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NOTIFICATION_TYPES } from '../notifications/types.catalog';
 import { PrismaService } from '../prisma/prisma.service';
 import { IssuedTokens, SessionsService } from '../sessions/sessions.service';
 
@@ -20,6 +22,7 @@ export class ImpersonationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly sessions: SessionsService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // SECURITY: Refusing to impersonate any super_admin prevents privilege
@@ -89,6 +92,18 @@ export class ImpersonationService {
     const updated = await this.prisma.impersonationSession.update({
       where: { id: impSessionId },
       data: { endedAt },
+    });
+
+    const durationMinutes = Math.round((endedAt.getTime() - existing.startedAt.getTime()) / 60_000);
+    await this.notifications.dispatch({
+      userId: existing.targetUserId,
+      type: NOTIFICATION_TYPES.IMPERSONATION_NOTICE,
+      payload: {
+        startedAt: existing.startedAt.toISOString(),
+        durationMinutes,
+        reason: existing.reason,
+      },
+      channels: ['IN_APP'],
     });
 
     return updated;

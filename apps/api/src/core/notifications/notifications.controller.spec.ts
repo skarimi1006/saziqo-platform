@@ -89,7 +89,7 @@ describe('NotificationsController', () => {
   });
 
   describe('GET /users/me/notifications', () => {
-    it('lists own notifications with renderedText and default limit 20', async () => {
+    it('lists own notifications with renderedTitle/renderedBody and default limit 20', async () => {
       const row = makeRow(10n);
       service.findAllForUser.mockResolvedValue({
         items: [row],
@@ -102,14 +102,16 @@ describe('NotificationsController', () => {
         payload: row.payload,
         readAt: row.readAt,
         createdAt: row.createdAt,
-        renderedText: 'پرداخت شما با موفقیت انجام شد.',
+        renderedTitle: 'پرداخت موفق',
+        renderedBody: 'پرداخت شما با موفقیت انجام شد.',
       });
 
       app = await buildApp(service);
       const res = await request(app.getHttpServer()).get('/users/me/notifications').expect(200);
 
       expect(res.body.data).toHaveLength(1);
-      expect(res.body.data[0].renderedText).toBe('پرداخت شما با موفقیت انجام شد.');
+      expect(res.body.data[0].renderedTitle).toBe('پرداخت موفق');
+      expect(res.body.data[0].renderedBody).toBe('پرداخت شما با موفقیت انجام شد.');
       // Sanitized: channel and userId must not appear
       expect(res.body.data[0].channel).toBeUndefined();
       expect(res.body.data[0].userId).toBeUndefined();
@@ -157,7 +159,8 @@ describe('NotificationsController', () => {
         payload: n.payload,
         readAt: n.readAt,
         createdAt: n.createdAt,
-        renderedText: 'متن',
+        renderedTitle: 'عنوان',
+        renderedBody: 'متن',
       }));
 
       app = await buildApp(service);

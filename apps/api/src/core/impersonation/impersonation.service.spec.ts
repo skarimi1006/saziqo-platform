@@ -4,6 +4,7 @@ import { HttpStatus } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 
 import { ErrorCode } from '../../common/types/response.types';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionsService } from '../sessions/sessions.service';
 
@@ -23,6 +24,7 @@ describe('ImpersonationService', () => {
   let service: ImpersonationService;
   let prisma: MockPrisma;
   let sessions: { issueImpersonationTokens: jest.Mock };
+  let notifications: { dispatch: jest.Mock };
 
   beforeEach(async () => {
     prisma = {
@@ -35,12 +37,16 @@ describe('ImpersonationService', () => {
       },
     };
     sessions = { issueImpersonationTokens: jest.fn() };
+    notifications = {
+      dispatch: jest.fn().mockResolvedValue({ dispatched: ['IN_APP'], failures: [] }),
+    };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
         ImpersonationService,
         { provide: PrismaService, useValue: prisma },
         { provide: SessionsService, useValue: sessions },
+        { provide: NotificationsService, useValue: notifications },
       ],
     }).compile();
 
@@ -143,6 +149,7 @@ describe('ImpersonationService', () => {
       const result = await service.stop(42n, 1n);
       expect(result).toBe(ended);
       expect(prisma.impersonationSession.update).not.toHaveBeenCalled();
+      expect(notifications.dispatch).not.toHaveBeenCalled();
     });
 
     it('stamps endedAt for an active session owned by the actor', async () => {
@@ -170,6 +177,33 @@ describe('ImpersonationService', () => {
         where: { id: 42n },
         data: { endedAt: expect.any(Date) },
       });
+    });
+
+    it('dispatches IMPERSONATION_NOTICE to the target user after stop', async () => {
+      const startedAt = new Date(Date.now() - 120_000);
+      prisma.impersonationSession.findUnique.mockResolvedValue({
+        id: 42n,
+        actorUserId: 1n,
+        targetUserId: 5n,
+        endedAt: null,
+        startedAt,
+        reason: 'support ticket #42',
+      });
+      prisma.impersonationSession.update.mockResolvedValue({});
+
+      await service.stop(42n, 1n);
+
+      expect(notifications.dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 5n,
+          type: 'IMPERSONATION_NOTICE',
+          channels: ['IN_APP'],
+          payload: expect.objectContaining({
+            reason: 'support ticket #42',
+            durationMinutes: expect.any(Number),
+          }),
+        }),
+      );
     });
   });
 
