@@ -46,6 +46,9 @@ export const envSchema = z.object({
     .string()
     .regex(/^\+989\d{9}$/, 'SUPER_ADMIN_PHONE must be Iranian E.164 format: +989XXXXXXXXX'),
 
+  // Email provider (real SMTP deferred to v1.5 — smtp adapter throws at startup)
+  EMAIL_PROVIDER: z.enum(['console', 'smtp']).default('console'),
+
   // SMS Provider
   SMS_PROVIDER: z.enum(['kavenegar', 'console']).default('console'),
   KAVENEGAR_API_KEY: z.string().optional(),

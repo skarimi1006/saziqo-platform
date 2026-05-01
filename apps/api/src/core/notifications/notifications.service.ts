@@ -233,19 +233,17 @@ export class NotificationsService {
     }
   }
 
-  // Minimal email content for Phase 8A — replaced by full catalog in Phase 8D.
   private renderEmailContent(
     type: string,
     payload: Record<string, unknown>,
   ): { subject: string; textBody: string } | null {
-    switch (type) {
-      case 'PAYMENT_SUCCEEDED':
-        return {
-          subject: 'پرداخت شما تأیید شد',
-          textBody: `پرداخت ${String(payload['amount'])} تومان با موفقیت تأیید شد.`,
-        };
-      default:
-        return null;
+    // Notification type names map to email template keys by lowercasing
+    // (e.g. PAYMENT_SUCCEEDED → payment_succeeded). Types with no matching
+    // email template return null and the EMAIL channel is silently skipped.
+    try {
+      return this.emailService.render(type.toLowerCase(), payload);
+    } catch {
+      return null;
     }
   }
 }
