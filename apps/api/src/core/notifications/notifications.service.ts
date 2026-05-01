@@ -32,18 +32,30 @@ export interface NotificationPagination {
   limit: number;
 }
 
+export interface NotificationRow {
+  id: bigint;
+  userId: bigint;
+  channel: NotificationChannel;
+  type: string;
+  payload: unknown;
+  readAt: Date | null;
+  createdAt: Date;
+}
+
 export interface NotificationPage {
-  items: {
-    id: bigint;
-    userId: bigint;
-    channel: NotificationChannel;
-    type: string;
-    payload: unknown;
-    readAt: Date | null;
-    createdAt: Date;
-  }[];
+  items: NotificationRow[];
   nextCursor: bigint | null;
   hasMore: boolean;
+}
+
+// Sanitized shape returned to HTTP callers — channel and userId are omitted.
+export interface NotificationView {
+  id: bigint;
+  type: string;
+  payload: unknown;
+  readAt: Date | null;
+  createdAt: Date;
+  renderedText: string;
 }
 
 @Injectable()
@@ -193,6 +205,19 @@ export class NotificationsService {
     });
   }
 
+  // Returns notification row enriched with rendered Persian text.
+  // Placeholder rendering per type — replaced by NOTIFICATION_TEMPLATES in Phase 8D.
+  renderForUser(notification: NotificationRow): NotificationView {
+    return {
+      id: notification.id,
+      type: notification.type,
+      payload: notification.payload,
+      readAt: notification.readAt,
+      createdAt: notification.createdAt,
+      renderedText: this.renderInAppText(notification.type),
+    };
+  }
+
   // ──────── private helpers ────────
 
   private async queryNotifications(
@@ -230,6 +255,34 @@ export class NotificationsService {
         return `سازیکو: پرداخت ${String(payload['amount'])} تومان تأیید شد. کد پیگیری: ${String(payload['reference'] ?? '')}`;
       default:
         return null;
+    }
+  }
+
+  // Placeholder IN_APP text per type — Phase 8D replaces with variable-interpolated catalog.
+  private renderInAppText(type: string): string {
+    switch (type) {
+      case 'PROFILE_COMPLETED':
+        return 'پروفایل شما با موفقیت تکمیل شد.';
+      case 'SESSION_REVOKED':
+        return 'یک نشست شما لغو شد.';
+      case 'IMPERSONATION_NOTICE':
+        return 'پشتیبانی سازیکو به حساب شما دسترسی داشت.';
+      case 'PAYMENT_SUCCEEDED':
+        return 'پرداخت شما با موفقیت انجام شد.';
+      case 'PAYMENT_FAILED':
+        return 'پرداخت ناموفق بود.';
+      case 'WALLET_CREDITED':
+        return 'موجودی کیف پول شما افزایش یافت.';
+      case 'WALLET_DEBITED':
+        return 'موجودی کیف پول شما کاهش یافت.';
+      case 'PAYOUT_REQUESTED':
+        return 'درخواست تسویه ثبت شد.';
+      case 'PAYOUT_APPROVED':
+        return 'تسویه شما تأیید شد.';
+      case 'PAYOUT_REJECTED':
+        return 'درخواست تسویه رد شد.';
+      default:
+        return type;
     }
   }
 
