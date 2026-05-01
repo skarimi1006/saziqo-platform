@@ -92,4 +92,12 @@ export const NOTIFICATION_TEMPLATES: Record<string, NotificationTemplate> = {
       body: (v) => `درخواست تسویه ${amt(v['amount'])} تومان رد شد. دلیل: ${String(v['reason'])}`,
     },
   },
+
+  PAYOUT_PAID: {
+    inApp: {
+      title: 'مبلغ تسویه واریز شد',
+      body: (v) =>
+        `مبلغ ${amt(v['amount'])} تومان به حساب بانکی شما واریز شد. شماره پیگیری: ${String(v['paymentReference'])}`,
+    },
+  },
 };

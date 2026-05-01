@@ -13,6 +13,7 @@ import { FilesModule } from './core/files/files.module';
 import { HealthModule } from './core/health/health.module';
 import { ImpersonationModule } from './core/impersonation/impersonation.module';
 import { NotificationsModule } from './core/notifications/notifications.module';
+import { PayoutsModule } from './core/payouts/payouts.module';
 import { PrismaModule } from './core/prisma/prisma.module';
 import { RbacModule } from './core/rbac/rbac.module';
 import { RedisModule } from './core/redis/redis.module';
@@ -42,6 +43,7 @@ import { WalletsModule } from './core/wallets/wallets.module';
     ImpersonationModule,
     NotificationsModule,
     WalletsModule,
+    PayoutsModule,
   ],
   providers: [
     { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },

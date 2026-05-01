@@ -10,6 +10,7 @@ export const NOTIFICATION_TYPES = {
   PAYOUT_REQUESTED: 'PAYOUT_REQUESTED', // IN_APP — admin sees
   PAYOUT_APPROVED: 'PAYOUT_APPROVED', // IN_APP — user sees
   PAYOUT_REJECTED: 'PAYOUT_REJECTED', // IN_APP — user sees
+  PAYOUT_PAID: 'PAYOUT_PAID', // IN_APP — user sees after ops marks as paid
   // Module-specific types registered via ModuleContract.registerNotificationTemplates()
 } as const;
 

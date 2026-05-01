@@ -36,13 +36,15 @@ model User {
   updatedAt          DateTime   @updatedAt
   deletedAt          DateTime?
 
-  sessions      Session[]
-  userRoles     UserRole[]
-  auditLogs     AuditLog[]
-  notifications Notification[]
-  wallet        Wallet?
-  files         File[]
-  ledgerEntries LedgerEntry[]
+  sessions        Session[]
+  userRoles       UserRole[]
+  auditLogs       AuditLog[]
+  notifications   Notification[]
+  wallet          Wallet?
+  files           File[]
+  ledgerEntries   LedgerEntry[]
+  payoutRequests  PayoutRequest[] @relation("PayoutRequester")
+  reviewedPayouts PayoutRequest[] @relation("PayoutReviewer")
 
   @@index([status])
   @@index([deletedAt])
@@ -266,8 +268,9 @@ model Wallet {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  user          User          @relation(fields: [userId], references: [id])
-  ledgerEntries LedgerEntry[]
+  user           User            @relation(fields: [userId], references: [id])
+  ledgerEntries  LedgerEntry[]
+  payoutRequests PayoutRequest[]
 
   @@map("wallets")
 }
@@ -308,4 +311,39 @@ model OtpAttempt {
   @@index([phone, createdAt])
   @@index([expiresAt])
   @@map("otp_attempts")
+}
+
+// ─── Payouts ─────────────────────────────────────────────────────────
+
+model PayoutRequest {
+  id               BigInt       @id @default(autoincrement())
+  userId           BigInt
+  walletId         BigInt
+  amount           BigInt
+  bankAccount      String       @db.VarChar(34)
+  accountHolder    String       @db.VarChar(200)
+  status           PayoutStatus @default(PENDING)
+  submittedAt      DateTime     @default(now())
+  reviewedByUserId BigInt?
+  reviewedAt       DateTime?
+  rejectionReason  String?      @db.VarChar(500)
+  paidAt           DateTime?
+  paymentReference String?      @db.VarChar(120)
+
+  user     User   @relation("PayoutRequester", fields: [userId], references: [id])
+  wallet   Wallet @relation(fields: [walletId], references: [id])
+  reviewer User?  @relation("PayoutReviewer", fields: [reviewedByUserId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+  @@index([submittedAt])
+  @@map("payout_requests")
+}
+
+enum PayoutStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  PAID
+  CANCELLED
 }
