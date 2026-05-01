@@ -165,6 +165,8 @@ model AuditLog {
   // SECURITY: payloadHash (sha256) records the inputs without storing
   // potentially-sensitive payload values directly.
   payloadHash String   @db.VarChar(64)
+  // Denormalized from payload for efficient admin-viewer filtering.
+  failed      Boolean  @default(false)
   ipAddress   String?  @db.VarChar(45)
   userAgent   String?  @db.VarChar(512)
   createdAt   DateTime @default(now())

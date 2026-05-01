@@ -67,6 +67,7 @@ describe('AuditService', () => {
           resource: 'user',
           resourceId: '5',
           payloadHash: expectedHash(payload),
+          failed: false,
           ipAddress: '127.0.0.1',
           userAgent: 'curl/8',
         },

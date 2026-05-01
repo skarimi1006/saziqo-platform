@@ -84,6 +84,7 @@ export class AuditInterceptor implements NestInterceptor {
           action: meta.action,
           resource: meta.resource,
           resourceId,
+          failed: true,
           payload: {
             failed: true,
             statusCode,
