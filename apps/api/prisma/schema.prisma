@@ -238,7 +238,8 @@ model LedgerEntry {
   amount      BigInt
   currency    String     @default("IRT") @db.VarChar(3)
   reference   String?    @db.VarChar(120)
-  description String?    @db.VarChar(255)
+  description String?    @db.VarChar(500)
+  metadata    Json?
   createdAt   DateTime   @default(now())
 
   user   User?   @relation(fields: [userId], references: [id])
