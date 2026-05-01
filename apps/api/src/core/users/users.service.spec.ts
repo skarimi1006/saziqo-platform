@@ -4,6 +4,7 @@ import { UserStatus } from '@prisma/client';
 
 import { ErrorCode } from '../../common/types/response.types';
 import { ConfigService } from '../../config/config.service';
+import { AuditService } from '../audit/audit.service';
 import { PermissionsService } from '../rbac/permissions.service';
 import { RedisService } from '../redis/redis.service';
 
@@ -34,6 +35,7 @@ describe('UsersService', () => {
     Pick<PermissionsService, 'userHasPermission' | 'assignRoleToUser' | 'removeRoleFromUser'>
   >;
   let mockConfig: { get: jest.Mock };
+  let mockAudit: { log: jest.Mock };
 
   beforeEach(async () => {
     mockClient = {
@@ -62,6 +64,7 @@ describe('UsersService', () => {
         return undefined;
       }),
     };
+    mockAudit = { log: jest.fn().mockResolvedValue(undefined) };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -70,6 +73,7 @@ describe('UsersService', () => {
         { provide: RedisService, useValue: { getClient: () => mockRedisClient } },
         { provide: PermissionsService, useValue: mockPermissions },
         { provide: ConfigService, useValue: mockConfig },
+        { provide: AuditService, useValue: mockAudit },
       ],
     }).compile();
 
@@ -167,6 +171,35 @@ describe('UsersService', () => {
       expect(arg.data.profileCompletedAt).toBeInstanceOf(Date);
       // Email verification is a separate flow — must NOT be set here.
       expect(arg.data.emailVerifiedAt).toBeUndefined();
+    });
+
+    it('writes a PROFILE_COMPLETED audit entry whose payload includes the submitted fields', async () => {
+      mockClient.user.update.mockResolvedValue({ id: 1n, status: UserStatus.ACTIVE });
+      const dto = {
+        firstName: 'علی',
+        lastName: 'احمدی',
+        nationalId: '0123456789',
+        email: 'ali@example.com',
+      };
+      await service.completeProfile(1n, dto);
+
+      expect(mockAudit.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorUserId: 1n,
+          action: 'PROFILE_COMPLETED',
+          resource: 'user',
+          resourceId: 1n,
+          payload: expect.objectContaining({
+            firstName: 'علی',
+            lastName: 'احمدی',
+            // The audit *service* is what redacts/masks before persist; the
+            // service-level call hands the raw values through and audit.log
+            // owns redaction. Tested in audit.service.spec.ts + redaction.spec.ts.
+            nationalId: '0123456789',
+            email: 'ali@example.com',
+          }),
+        }),
+      );
     });
   });
 
@@ -442,6 +475,24 @@ describe('UsersService', () => {
 
       expect(mockRedisClient.del).toHaveBeenCalledWith('user:permissions:1');
       expect(mockRedisClient.del).toHaveBeenCalledWith('user:status:1');
+    });
+
+    it('writes an ADMIN_USER_STATUS_CHANGED audit entry with from/to status', async () => {
+      const user = makeUser(1n, { status: UserStatus.ACTIVE });
+      mockClient.user.findUnique.mockResolvedValue(user);
+      mockClient.user.update.mockResolvedValue(user);
+
+      await service.updateStatusByAdmin(1n, UserStatus.SUSPENDED, 99n);
+
+      expect(mockAudit.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorUserId: 99n,
+          action: 'ADMIN_USER_STATUS_CHANGED',
+          resource: 'user',
+          resourceId: 1n,
+          payload: { from: UserStatus.ACTIVE, to: UserStatus.SUSPENDED },
+        }),
+      );
     });
   });
 

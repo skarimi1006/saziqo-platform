@@ -8,6 +8,8 @@ import { v4 as uuidv4 } from 'uuid';
 
 import { ErrorCode } from '../../common/types/response.types';
 import { ConfigService } from '../../config/config.service';
+import { AUDIT_ACTIONS } from '../audit/actions.catalog';
+import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface RefreshCookie {
@@ -37,6 +39,7 @@ export class SessionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly audit: AuditService,
   ) {}
 
   // SECURITY: Issues access + refresh pair. Refresh token is generated as
@@ -132,10 +135,20 @@ export class SessionsService {
         // SECURITY: A previously-revoked token is being presented. Either the
         // user already rotated successfully (and an attacker stole the old
         // token) or the token leaked. Revoke every active session for this
-        // user as defense in depth.
+        // user as defense in depth, and write an audit row via the outer
+        // Prisma client so the row survives this transaction's rollback.
         await tx.session.updateMany({
           where: { userId: session.userId, revokedAt: null },
           data: { revokedAt: new Date() },
+        });
+        await this.audit.log({
+          actorUserId: session.userId,
+          action: AUDIT_ACTIONS.SESSION_REPLAY_DETECTED,
+          resource: 'session',
+          resourceId: session.id,
+          payload: { presentedSessionId: String(session.id) },
+          ipAddress: null,
+          userAgent: null,
         });
         throw new HttpException(
           {

@@ -7,6 +7,7 @@ import { ResponseInterceptor } from './common/interceptors/response.interceptor'
 import { PinoLoggerModule } from './common/middleware/logger.middleware';
 import { RateLimitGuard } from './common/middleware/rate-limit.middleware';
 import { ConfigModule } from './config/config.module';
+import { AuditModule } from './core/audit/audit.module';
 import { HealthModule } from './core/health/health.module';
 import { ImpersonationModule } from './core/impersonation/impersonation.module';
 import { PrismaModule } from './core/prisma/prisma.module';
@@ -25,6 +26,7 @@ import { UsersModule } from './core/users/users.module';
     PrismaModule,
     RedisModule,
     RbacModule,
+    AuditModule,
     HealthModule,
     UsersModule,
     ImpersonationModule,

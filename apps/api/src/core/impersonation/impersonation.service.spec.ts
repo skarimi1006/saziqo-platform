@@ -4,6 +4,7 @@ import { HttpStatus } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 
 import { ErrorCode } from '../../common/types/response.types';
+import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionsService } from '../sessions/sessions.service';
 
@@ -23,6 +24,7 @@ describe('ImpersonationService', () => {
   let service: ImpersonationService;
   let prisma: MockPrisma;
   let sessions: { issueImpersonationTokens: jest.Mock };
+  let audit: { log: jest.Mock };
 
   beforeEach(async () => {
     prisma = {
@@ -35,12 +37,14 @@ describe('ImpersonationService', () => {
       },
     };
     sessions = { issueImpersonationTokens: jest.fn() };
+    audit = { log: jest.fn().mockResolvedValue(undefined) };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
         ImpersonationService,
         { provide: PrismaService, useValue: prisma },
         { provide: SessionsService, useValue: sessions },
+        { provide: AuditService, useValue: audit },
       ],
     }).compile();
 
@@ -105,6 +109,17 @@ describe('ImpersonationService', () => {
       );
       expect(result.impSessionId).toBe(42n);
       expect(result.tokens.accessToken).toBe('imp.access');
+
+      expect(audit.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'IMPERSONATION_STARTED',
+          actorUserId: 1n,
+          resource: 'user',
+          resourceId: 5n,
+          payload: { reason: 'investigating support ticket' },
+          impersonationSessionId: 42n,
+        }),
+      );
     });
   });
 
@@ -170,6 +185,20 @@ describe('ImpersonationService', () => {
         where: { id: 42n },
         data: { endedAt: expect.any(Date) },
       });
+
+      expect(audit.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'IMPERSONATION_ENDED',
+          actorUserId: 1n,
+          resource: 'user',
+          resourceId: 5n,
+          impersonationSessionId: 42n,
+          payload: expect.objectContaining({
+            reason: 'support',
+            durationSeconds: expect.any(Number),
+          }),
+        }),
+      );
     });
   });
 

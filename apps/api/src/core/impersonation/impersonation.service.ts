@@ -1,7 +1,9 @@
-import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { ImpersonationSession } from '@prisma/client';
 
 import { ErrorCode } from '../../common/types/response.types';
+import { AUDIT_ACTIONS } from '../audit/actions.catalog';
+import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { IssuedTokens, SessionsService } from '../sessions/sessions.service';
 
@@ -12,11 +14,10 @@ export interface StartImpersonationResult {
 
 @Injectable()
 export class ImpersonationService {
-  private readonly logger = new Logger(ImpersonationService.name);
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly sessions: SessionsService,
+    private readonly audit: AuditService,
   ) {}
 
   // SECURITY: Refusing to impersonate any super_admin prevents privilege
@@ -61,15 +62,16 @@ export class ImpersonationService {
       ipAddress,
     );
 
-    this.logger.log(
-      JSON.stringify({
-        event: 'IMPERSONATION_STARTED',
-        impSessionId: String(created.id),
-        actorUserId: String(actorUserId),
-        targetUserId: String(targetUserId),
-        reason,
-      }),
-    );
+    await this.audit.log({
+      actorUserId,
+      action: AUDIT_ACTIONS.IMPERSONATION_STARTED,
+      resource: 'user',
+      resourceId: targetUserId,
+      payload: { reason },
+      ipAddress,
+      userAgent,
+      impersonationSessionId: created.id,
+    });
 
     return { impSessionId: created.id, tokens };
   }
@@ -103,16 +105,19 @@ export class ImpersonationService {
       Math.floor((endedAt.getTime() - updated.startedAt.getTime()) / 1000),
     );
 
-    this.logger.log(
-      JSON.stringify({
-        event: 'IMPERSONATION_ENDED',
-        impSessionId: String(updated.id),
-        actorUserId: String(updated.actorUserId),
-        targetUserId: String(updated.targetUserId),
-        durationSeconds,
+    await this.audit.log({
+      actorUserId: updated.actorUserId,
+      action: AUDIT_ACTIONS.IMPERSONATION_ENDED,
+      resource: 'user',
+      resourceId: updated.targetUserId,
+      payload: {
         reason: updated.reason,
-      }),
-    );
+        durationSeconds,
+      },
+      ipAddress: null,
+      userAgent: null,
+      impersonationSessionId: updated.id,
+    });
 
     return updated;
   }

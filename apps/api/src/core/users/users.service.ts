@@ -3,6 +3,8 @@ import { Prisma, User, UserStatus } from '@prisma/client';
 
 import { ErrorCode } from '../../common/types/response.types';
 import { ConfigService } from '../../config/config.service';
+import { AUDIT_ACTIONS } from '../audit/actions.catalog';
+import { AuditService } from '../audit/audit.service';
 import { PermissionsService } from '../rbac/permissions.service';
 import { RedisService } from '../redis/redis.service';
 
@@ -68,6 +70,7 @@ export class UsersService {
     private readonly redis: RedisService,
     private readonly permissions: PermissionsService,
     private readonly config: ConfigService,
+    private readonly audit: AuditService,
   ) {}
 
   // ──────── Reads (use repo.read() for future read-replica support) ────────
@@ -176,7 +179,7 @@ export class UsersService {
   // user into ACTIVE. Email is recorded but emailVerifiedAt stays null —
   // email verification is a separate flow (deferred to v1.5 per the system plan).
   async completeProfile(id: bigint, dto: CompleteProfileDto): Promise<User> {
-    return this.repo.write().user.update({
+    const updated = await this.repo.write().user.update({
       where: { id },
       data: {
         firstName: dto.firstName,
@@ -187,6 +190,24 @@ export class UsersService {
         profileCompletedAt: new Date(),
       },
     });
+
+    await this.audit.log({
+      actorUserId: id,
+      action: AUDIT_ACTIONS.PROFILE_COMPLETED,
+      resource: 'user',
+      resourceId: id,
+      payload: {
+        firstName: dto.firstName,
+        lastName: dto.lastName,
+        // nationalId/email/phone are redacted by AuditService before persist
+        nationalId: dto.nationalId,
+        email: dto.email,
+      },
+      ipAddress: null,
+      userAgent: null,
+    });
+
+    return updated;
   }
 
   // Soft delete — never hard delete users (audit log + ledger reference them).
@@ -233,15 +254,18 @@ export class UsersService {
 
     await this.invalidateUserCache(userId);
 
-    // CLAUDE: Placeholder — replaced by AuditService in Phase 6B.
-    this.logger.log(
-      JSON.stringify({
-        event: 'ADMIN_USER_STATUS_CHANGED',
-        actorUserId: String(actorUserId),
-        targetUserId: String(userId),
-        changes: { status: newStatus },
-      }),
-    );
+    await this.audit.log({
+      actorUserId,
+      action: AUDIT_ACTIONS.ADMIN_USER_STATUS_CHANGED,
+      resource: 'user',
+      resourceId: userId,
+      payload: {
+        from: user.status,
+        to: newStatus,
+      },
+      ipAddress: null,
+      userAgent: null,
+    });
 
     return updated;
   }

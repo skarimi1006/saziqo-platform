@@ -8,6 +8,7 @@ import { jwtVerify } from 'jose';
 
 import { ErrorCode } from '../../common/types/response.types';
 import { ConfigService } from '../../config/config.service';
+import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 import { SessionsService } from './sessions.service';
@@ -31,6 +32,7 @@ describe('SessionsService', () => {
   let service: SessionsService;
   let mockPrisma: MockPrisma;
   let mockConfig: { get: jest.Mock; isProduction: boolean };
+  let mockAudit: { log: jest.Mock };
 
   beforeEach(async () => {
     mockPrisma = {
@@ -58,11 +60,14 @@ describe('SessionsService', () => {
       isProduction: false,
     };
 
+    mockAudit = { log: jest.fn().mockResolvedValue(undefined) };
+
     const moduleRef = await Test.createTestingModule({
       providers: [
         SessionsService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: ConfigService, useValue: mockConfig },
+        { provide: AuditService, useValue: mockAudit },
       ],
     }).compile();
 
@@ -192,6 +197,16 @@ describe('SessionsService', () => {
       });
       // No new session created
       expect(mockPrisma.session.create).not.toHaveBeenCalled();
+
+      // SESSION_REPLAY_DETECTED audit row is written via the outer Prisma
+      // client so it survives the transaction's rollback.
+      expect(mockAudit.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'SESSION_REPLAY_DETECTED',
+          actorUserId: 7n,
+          resource: 'session',
+        }),
+      );
     });
 
     it('expired: throws SESSION_EXPIRED and revokes that session', async () => {
