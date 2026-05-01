@@ -12,6 +12,7 @@ import { AuditModule } from './core/audit/audit.module';
 import { FilesModule } from './core/files/files.module';
 import { HealthModule } from './core/health/health.module';
 import { ImpersonationModule } from './core/impersonation/impersonation.module';
+import { NotificationsModule } from './core/notifications/notifications.module';
 import { PrismaModule } from './core/prisma/prisma.module';
 import { RbacModule } from './core/rbac/rbac.module';
 import { RedisModule } from './core/redis/redis.module';
@@ -38,6 +39,7 @@ import { UsersModule } from './core/users/users.module';
     HealthModule,
     UsersModule,
     ImpersonationModule,
+    NotificationsModule,
   ],
   providers: [
     { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },
