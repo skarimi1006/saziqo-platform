@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import { LedgerKind } from '@prisma/client';
 
 import { ErrorCode } from '../../common/types/response.types';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 import { LedgerService } from './ledger.service';
@@ -35,6 +36,7 @@ describe('LedgerService', () => {
     $transaction: jest.Mock;
     $queryRaw: jest.Mock;
   };
+  let notificationsDispatch: jest.Mock;
 
   const walletId = 10n;
   const userId = 1n;
@@ -55,8 +57,14 @@ describe('LedgerService', () => {
       $queryRaw: jest.fn(),
     };
 
+    notificationsDispatch = jest.fn().mockResolvedValue({ dispatched: ['IN_APP'], failures: [] });
+
     const moduleRef = await Test.createTestingModule({
-      providers: [LedgerService, { provide: PrismaService, useValue: mockPrisma }],
+      providers: [
+        LedgerService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: NotificationsService, useValue: { dispatch: notificationsDispatch } },
+      ],
     }).compile();
 
     service = moduleRef.get(LedgerService);
@@ -65,7 +73,7 @@ describe('LedgerService', () => {
   // ──────── credit ────────
 
   describe('credit', () => {
-    it('creates a CREDIT entry and increments wallet balance', async () => {
+    it('creates a CREDIT entry, increments wallet balance, and dispatches notification', async () => {
       const wallet = makeWallet(walletId, 1000n, userId);
       const entry = makeEntry(1n, walletId, LedgerKind.CREDIT, 500n);
 
@@ -87,6 +95,13 @@ describe('LedgerService', () => {
         where: { id: walletId },
         data: { balance: 1500n },
       });
+      expect(notificationsDispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId,
+          type: 'WALLET_CREDITED',
+          channels: ['IN_APP'],
+        }),
+      );
       expect(result).toEqual(entry);
     });
 
@@ -111,7 +126,7 @@ describe('LedgerService', () => {
   // ──────── debit ────────
 
   describe('debit', () => {
-    it('creates a DEBIT entry and decrements wallet balance', async () => {
+    it('creates a DEBIT entry, decrements wallet balance, and dispatches notification', async () => {
       const wallet = makeWallet(walletId, 2000n, userId);
       const entry = makeEntry(2n, walletId, LedgerKind.DEBIT, 300n);
 
@@ -124,6 +139,9 @@ describe('LedgerService', () => {
         where: { id: walletId },
         data: { balance: 1700n },
       });
+      expect(notificationsDispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ userId, type: 'WALLET_DEBITED', channels: ['IN_APP'] }),
+      );
     });
 
     it('throws INSUFFICIENT_FUNDS when debit exceeds balance', async () => {

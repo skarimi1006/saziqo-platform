@@ -8,6 +8,7 @@ import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PermissionsService } from '../rbac/permissions.service';
 import { RedisService } from '../redis/redis.service';
+import { WalletsService } from '../wallets/wallets.service';
 
 import { UsersRepository } from './users.repository';
 import { UsersService } from './users.service';
@@ -38,6 +39,7 @@ describe('UsersService', () => {
   let mockConfig: { get: jest.Mock };
   let mockAudit: { log: jest.Mock };
   let mockNotifications: { dispatch: jest.Mock };
+  let mockWallets: { findOrCreateForUser: jest.Mock };
 
   beforeEach(async () => {
     mockClient = {
@@ -70,6 +72,9 @@ describe('UsersService', () => {
     mockNotifications = {
       dispatch: jest.fn().mockResolvedValue({ dispatched: ['IN_APP'], failures: [] }),
     };
+    mockWallets = {
+      findOrCreateForUser: jest.fn().mockResolvedValue({ id: 1n, userId: 1n, balance: 0n }),
+    };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -80,6 +85,7 @@ describe('UsersService', () => {
         { provide: ConfigService, useValue: mockConfig },
         { provide: AuditService, useValue: mockAudit },
         { provide: NotificationsService, useValue: mockNotifications },
+        { provide: WalletsService, useValue: mockWallets },
       ],
     }).compile();
 
@@ -224,6 +230,19 @@ describe('UsersService', () => {
         payload: {},
         channels: ['IN_APP'],
       });
+    });
+
+    it('creates wallet for user on profile completion', async () => {
+      mockClient.user.update.mockResolvedValue({ id: 1n, status: UserStatus.ACTIVE });
+      const dto = {
+        firstName: 'علی',
+        lastName: 'احمدی',
+        nationalId: '0123456789',
+        email: 'ali@example.com',
+      };
+      await service.completeProfile(1n, dto);
+
+      expect(mockWallets.findOrCreateForUser).toHaveBeenCalledWith(1n);
     });
   });
 

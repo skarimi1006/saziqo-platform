@@ -9,6 +9,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { NOTIFICATION_TYPES } from '../notifications/types.catalog';
 import { PermissionsService } from '../rbac/permissions.service';
 import { RedisService } from '../redis/redis.service';
+import { WalletsService } from '../wallets/wallets.service';
 
 import { CompleteProfileDto } from './dto/complete-profile.dto';
 import { UsersRepository } from './users.repository';
@@ -74,6 +75,7 @@ export class UsersService {
     private readonly config: ConfigService,
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
+    private readonly wallets: WalletsService,
   ) {}
 
   // ──────── Reads (use repo.read() for future read-replica support) ────────
@@ -216,6 +218,8 @@ export class UsersService {
       payload: {},
       channels: ['IN_APP'],
     });
+
+    await this.wallets.findOrCreateForUser(id);
 
     return updated;
   }

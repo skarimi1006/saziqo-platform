@@ -2,6 +2,8 @@ import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { LedgerKind, Prisma } from '@prisma/client';
 
 import { ErrorCode } from '../../common/types/response.types';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NOTIFICATION_TYPES } from '../notifications/types.catalog';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface LedgerWriteInput {
@@ -42,15 +44,23 @@ export interface LedgerPage {
 
 @Injectable()
 export class LedgerService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   async credit(input: LedgerWriteInput): Promise<LedgerEntryRow> {
     this.assertPositive(input.amount);
-    return this.prisma.$transaction(async (tx) => {
-      const wallet = await this.lockWallet(tx, input.walletId);
-      const newBalance = wallet.balance + input.amount;
 
-      const entry = await tx.ledgerEntry.create({
+    const {
+      entry,
+      newBalance,
+      userId: walletUserId,
+    } = await this.prisma.$transaction(async (tx) => {
+      const wallet = await this.lockWallet(tx, input.walletId);
+      const nb = wallet.balance + input.amount;
+
+      const e = await tx.ledgerEntry.create({
         data: {
           walletId: input.walletId,
           userId: wallet.userId,
@@ -67,27 +77,45 @@ export class LedgerService {
 
       await tx.wallet.update({
         where: { id: input.walletId },
-        data: { balance: newBalance },
+        data: { balance: nb },
       });
 
-      return entry;
+      return { entry: e, newBalance: nb, userId: wallet.userId };
     });
+
+    // Dispatch in-app notification after the transaction commits.
+    // Skip for system entries that have no associated user.
+    if (walletUserId) {
+      await this.notifications.dispatch({
+        userId: walletUserId,
+        type: NOTIFICATION_TYPES.WALLET_CREDITED,
+        payload: { amount: input.amount, balance: newBalance },
+        channels: ['IN_APP'],
+      });
+    }
+
+    return entry;
   }
 
   async debit(input: LedgerWriteInput): Promise<LedgerEntryRow> {
     this.assertPositive(input.amount);
-    return this.prisma.$transaction(async (tx) => {
-      const wallet = await this.lockWallet(tx, input.walletId);
-      const newBalance = wallet.balance - input.amount;
 
-      if (newBalance < 0n) {
+    const {
+      entry,
+      newBalance,
+      userId: walletUserId,
+    } = await this.prisma.$transaction(async (tx) => {
+      const wallet = await this.lockWallet(tx, input.walletId);
+      const nb = wallet.balance - input.amount;
+
+      if (nb < 0n) {
         throw new HttpException(
           { code: ErrorCode.INSUFFICIENT_FUNDS, message: 'Insufficient wallet balance' },
           HttpStatus.UNPROCESSABLE_ENTITY,
         );
       }
 
-      const entry = await tx.ledgerEntry.create({
+      const e = await tx.ledgerEntry.create({
         data: {
           walletId: input.walletId,
           userId: wallet.userId,
@@ -104,11 +132,22 @@ export class LedgerService {
 
       await tx.wallet.update({
         where: { id: input.walletId },
-        data: { balance: newBalance },
+        data: { balance: nb },
       });
 
-      return entry;
+      return { entry: e, newBalance: nb, userId: wallet.userId };
     });
+
+    if (walletUserId) {
+      await this.notifications.dispatch({
+        userId: walletUserId,
+        type: NOTIFICATION_TYPES.WALLET_DEBITED,
+        payload: { amount: input.amount, balance: newBalance },
+        channels: ['IN_APP'],
+      });
+    }
+
+    return entry;
   }
 
   // Both wallets are locked in ascending id order to prevent deadlocks.
@@ -124,73 +163,103 @@ export class LedgerService {
       );
     }
 
-    return this.prisma.$transaction(async (tx) => {
-      // Lock in deterministic order (lowest id first) to prevent deadlocks
-      const [firstId, secondId] =
-        input.fromWalletId < input.toWalletId
-          ? [input.fromWalletId, input.toWalletId]
-          : [input.toWalletId, input.fromWalletId];
+    const { debitEntry, creditEntry, fromUserId, toUserId, newFromBalance, newToBalance } =
+      await this.prisma.$transaction(async (tx) => {
+        // Lock in deterministic order (lowest id first) to prevent deadlocks
+        const [firstId, secondId] =
+          input.fromWalletId < input.toWalletId
+            ? [input.fromWalletId, input.toWalletId]
+            : [input.toWalletId, input.fromWalletId];
 
-      const firstLocked = await this.lockWallet(tx, firstId);
-      const secondLocked = await this.lockWallet(tx, secondId);
+        const firstLocked = await this.lockWallet(tx, firstId);
+        const secondLocked = await this.lockWallet(tx, secondId);
 
-      // Identify which locked row is from/to
-      const fromWallet = firstLocked.id === input.fromWalletId ? firstLocked : secondLocked;
-      const toWallet = firstLocked.id === input.toWalletId ? firstLocked : secondLocked;
+        // Identify which locked row is from/to
+        const fromWallet = firstLocked.id === input.fromWalletId ? firstLocked : secondLocked;
+        const toWallet = firstLocked.id === input.toWalletId ? firstLocked : secondLocked;
 
-      const newFromBalance = fromWallet.balance - input.amount;
-      if (newFromBalance < 0n) {
-        throw new HttpException(
-          {
-            code: ErrorCode.INSUFFICIENT_FUNDS,
-            message: 'Insufficient wallet balance for transfer',
+        const nfb = fromWallet.balance - input.amount;
+        if (nfb < 0n) {
+          throw new HttpException(
+            {
+              code: ErrorCode.INSUFFICIENT_FUNDS,
+              message: 'Insufficient wallet balance for transfer',
+            },
+            HttpStatus.UNPROCESSABLE_ENTITY,
+          );
+        }
+
+        const transferMeta = {
+          ...(input.metadata ?? {}),
+          fromWalletId: input.fromWalletId.toString(),
+          toWalletId: input.toWalletId.toString(),
+        };
+
+        const de = await tx.ledgerEntry.create({
+          data: {
+            walletId: input.fromWalletId,
+            userId: fromWallet.userId,
+            kind: LedgerKind.DEBIT,
+            amount: input.amount,
+            reference: input.reference ?? null,
+            description: input.description ?? null,
+            metadata: transferMeta as Prisma.InputJsonValue,
           },
-          HttpStatus.UNPROCESSABLE_ENTITY,
-        );
-      }
+        });
 
-      const transferMeta = {
-        ...(input.metadata ?? {}),
-        fromWalletId: input.fromWalletId.toString(),
-        toWalletId: input.toWalletId.toString(),
-      };
+        await tx.wallet.update({
+          where: { id: input.fromWalletId },
+          data: { balance: nfb },
+        });
 
-      const debitEntry = await tx.ledgerEntry.create({
-        data: {
-          walletId: input.fromWalletId,
-          userId: fromWallet.userId,
-          kind: LedgerKind.DEBIT,
-          amount: input.amount,
-          reference: input.reference ?? null,
-          description: input.description ?? null,
-          metadata: transferMeta as Prisma.InputJsonValue,
-        },
+        const ntb = toWallet.balance + input.amount;
+
+        const ce = await tx.ledgerEntry.create({
+          data: {
+            walletId: input.toWalletId,
+            userId: toWallet.userId,
+            kind: LedgerKind.CREDIT,
+            amount: input.amount,
+            reference: input.reference ?? null,
+            description: input.description ?? null,
+            metadata: transferMeta as Prisma.InputJsonValue,
+          },
+        });
+
+        await tx.wallet.update({
+          where: { id: input.toWalletId },
+          data: { balance: ntb },
+        });
+
+        return {
+          debitEntry: de,
+          creditEntry: ce,
+          fromUserId: fromWallet.userId,
+          toUserId: toWallet.userId,
+          newFromBalance: nfb,
+          newToBalance: ntb,
+        };
       });
 
-      await tx.wallet.update({
-        where: { id: input.fromWalletId },
-        data: { balance: newFromBalance },
+    // Notify both affected users — each gets only their own notification
+    if (fromUserId) {
+      await this.notifications.dispatch({
+        userId: fromUserId,
+        type: NOTIFICATION_TYPES.WALLET_DEBITED,
+        payload: { amount: input.amount, balance: newFromBalance },
+        channels: ['IN_APP'],
       });
-
-      const creditEntry = await tx.ledgerEntry.create({
-        data: {
-          walletId: input.toWalletId,
-          userId: toWallet.userId,
-          kind: LedgerKind.CREDIT,
-          amount: input.amount,
-          reference: input.reference ?? null,
-          description: input.description ?? null,
-          metadata: transferMeta as Prisma.InputJsonValue,
-        },
+    }
+    if (toUserId) {
+      await this.notifications.dispatch({
+        userId: toUserId,
+        type: NOTIFICATION_TYPES.WALLET_CREDITED,
+        payload: { amount: input.amount, balance: newToBalance },
+        channels: ['IN_APP'],
       });
+    }
 
-      await tx.wallet.update({
-        where: { id: input.toWalletId },
-        data: { balance: toWallet.balance + input.amount },
-      });
-
-      return { debitEntry, creditEntry };
-    });
+    return { debitEntry, creditEntry };
   }
 
   async getBalance(walletId: bigint): Promise<bigint> {

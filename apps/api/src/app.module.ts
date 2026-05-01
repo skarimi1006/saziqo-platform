@@ -17,6 +17,7 @@ import { PrismaModule } from './core/prisma/prisma.module';
 import { RbacModule } from './core/rbac/rbac.module';
 import { RedisModule } from './core/redis/redis.module';
 import { UsersModule } from './core/users/users.module';
+import { WalletsModule } from './core/wallets/wallets.module';
 
 // CLAUDE: APP_INTERCEPTOR providers are applied in declaration order — the
 // first declared is OUTERMOST. The runtime request flow is therefore:
@@ -40,6 +41,7 @@ import { UsersModule } from './core/users/users.module';
     UsersModule,
     ImpersonationModule,
     NotificationsModule,
+    WalletsModule,
   ],
   providers: [
     { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },
