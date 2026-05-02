@@ -2,10 +2,14 @@
 
 ## Mandatory pre-work
 
-Before any implementation session, read both plan files in this repo root:
+Before any implementation session, read the plan files under `plan/`:
 
-- `saziqo-platform-system-plan.md` — locked decisions, architecture, module contract, all phase groups
-- `saziqo-platform-phases-1-4.md` — executable phase detail for groups 1–4
+- `plan/saziqo-platform-system-plan.md` — locked decisions, architecture, module contract, all phase groups
+- `plan/saziqo-platform-phases-1-4.md` — executable phase detail for groups 1–4
+- `plan/saziqo-platform-phases-5-7.md` — phase detail for groups 5–7
+- `plan/saziqo-platform-phases-8-10.md` — phase detail for groups 8–10
+- `plan/saziqo-platform-phases-11-13.md` — phase detail for groups 11–13
+- `plan/saziqo-platform-phases-14-16.md` — phase detail for groups 14–16
 
 When in conflict, the system plan's locked decisions win.
 
