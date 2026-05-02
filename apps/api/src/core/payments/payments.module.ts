@@ -8,14 +8,23 @@ import { WalletsModule } from '../wallets/wallets.module';
 import { PaymentLedgerReconciler } from './payment-ledger.reconciler';
 import { PAYMENT_PROVIDER, type PaymentProvider } from './payment-provider.interface';
 import { PaymentsCallbackController } from './payments-callback.controller';
-import { AdminPaymentsController, PaymentsController } from './payments.controller';
+import {
+  AdminPaymentsController,
+  AdminRefundsController,
+  PaymentsController,
+} from './payments.controller';
 import { PaymentsService } from './payments.service';
 import { ConsolePaymentProvider } from './providers/console.provider';
 import { ZarinPalProvider } from './providers/zarinpal.provider';
 
 @Module({
   imports: [NotificationsModule, LedgerModule, WalletsModule],
-  controllers: [PaymentsController, AdminPaymentsController, PaymentsCallbackController],
+  controllers: [
+    PaymentsController,
+    AdminPaymentsController,
+    AdminRefundsController,
+    PaymentsCallbackController,
+  ],
   providers: [
     PaymentsService,
     PaymentLedgerReconciler,

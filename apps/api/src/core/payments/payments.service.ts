@@ -1,16 +1,39 @@
 import { HttpException, HttpStatus, Inject, Injectable, Logger } from '@nestjs/common';
-import { PaymentStatus, Prisma } from '@prisma/client';
+import { PaymentStatus, Prisma, RefundStatus } from '@prisma/client';
 
 import { ErrorCode } from '../../common/types/response.types';
 import { ConfigService } from '../../config/config.service';
+import { LedgerService } from '../ledger/ledger.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NOTIFICATION_TYPES } from '../notifications/types.catalog';
 import { PrismaService } from '../prisma/prisma.service';
+import { WalletsService } from '../wallets/wallets.service';
 
 import { PaymentLedgerReconciler } from './payment-ledger.reconciler';
 import { PAYMENT_PROVIDER, type PaymentProvider } from './payment-provider.interface';
 
 const PURPOSE_PATTERN = /^[a-z_]+(:.+)?$/;
+
+// SECURITY: ZarinPal's refund() throws a plain Error tagged with the
+// REFUND_NOT_SUPPORTED_BY_PROVIDER code. We detect this string explicitly
+// so that any *other* provider error fails loudly and we don't silently
+// fall into manual-refund mode on a transient gateway issue.
+function isRefundNotSupportedError(err: unknown): boolean {
+  if (err instanceof Error) {
+    return err.message.includes(ErrorCode.REFUND_NOT_SUPPORTED_BY_PROVIDER);
+  }
+  return false;
+}
+
+function isInsufficientFundsError(err: unknown): boolean {
+  if (err instanceof HttpException) {
+    const response = err.getResponse();
+    if (response && typeof response === 'object' && 'code' in response) {
+      return (response as { code: unknown }).code === ErrorCode.INSUFFICIENT_FUNDS;
+    }
+  }
+  return false;
+}
 
 export interface InitiateInput {
   userId: bigint;
@@ -66,6 +89,37 @@ export interface PaymentPage {
   hasMore: boolean;
 }
 
+export interface RefundInput {
+  paymentId: bigint;
+  amount?: bigint | undefined;
+  reason: string;
+  actorUserId: bigint;
+}
+
+export interface MarkRefundCompletedInput {
+  refundId: bigint;
+  bankReference: string;
+  actorUserId: bigint;
+}
+
+export interface RefundRow {
+  id: bigint;
+  paymentId: bigint;
+  amount: bigint;
+  reason: string;
+  status: RefundStatus;
+  requestedByUserId: bigint;
+  requestedAt: Date;
+  completedAt: Date | null;
+  bankReference: string | null;
+}
+
+export interface RefundPage {
+  items: RefundRow[];
+  nextCursor: bigint | null;
+  hasMore: boolean;
+}
+
 @Injectable()
 export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
@@ -75,6 +129,8 @@ export class PaymentsService {
     private readonly config: ConfigService,
     private readonly notifications: NotificationsService,
     private readonly reconciler: PaymentLedgerReconciler,
+    private readonly wallets: WalletsService,
+    private readonly ledger: LedgerService,
     @Inject(PAYMENT_PROVIDER) private readonly provider: PaymentProvider,
   ) {}
 
@@ -292,6 +348,188 @@ export class PaymentsService {
     if (filters.cursor) where.id = { lt: filters.cursor };
 
     const rows = await this.prisma.payment.findMany({
+      where,
+      orderBy: { id: 'desc' },
+      take,
+    });
+
+    const hasMore = rows.length > filters.limit;
+    const items = hasMore ? rows.slice(0, filters.limit) : rows;
+    const last = items[items.length - 1];
+    const nextCursor = hasMore && last ? last.id : null;
+
+    return { items, nextCursor, hasMore };
+  }
+
+  // SECURITY: Refunds are reverse-money. Authorization (admin:approve:payout
+  // + S6 confirm header) is enforced at the controller layer. The service
+  // protects against accounting errors: only SUCCEEDED payments can be
+  // refunded, and the cumulative refund amount cannot exceed the original
+  // payment. PENDING_MANUAL refunds count toward the cap to prevent
+  // double-issuance — even though the plan only requires summing COMPLETED
+  // ones, summing both statuses is the safer interpretation since the wallet
+  // debit lands at request time and the platform owes the user from then on.
+  async refund(input: RefundInput): Promise<RefundRow> {
+    const payment = await this.prisma.payment.findUnique({ where: { id: input.paymentId } });
+    if (!payment) {
+      throw new HttpException(
+        { code: ErrorCode.NOT_FOUND, message: 'Payment not found' },
+        HttpStatus.NOT_FOUND,
+      );
+    }
+    if (payment.status !== PaymentStatus.SUCCEEDED) {
+      throw new HttpException(
+        {
+          code: ErrorCode.PAYMENT_NOT_REFUNDABLE,
+          message: `Cannot refund payment with status ${payment.status}`,
+        },
+        HttpStatus.UNPROCESSABLE_ENTITY,
+      );
+    }
+
+    const refundAmount = input.amount ?? payment.amount;
+    if (refundAmount <= 0n) {
+      throw new HttpException(
+        { code: ErrorCode.VALIDATION_ERROR, message: 'Refund amount must be positive' },
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const sumResult = await this.prisma.refund.aggregate({
+      where: { paymentId: input.paymentId },
+      _sum: { amount: true },
+    });
+    const alreadyRefunded = sumResult._sum.amount ?? 0n;
+    const remaining = payment.amount - alreadyRefunded;
+    if (refundAmount > remaining) {
+      throw new HttpException(
+        {
+          code: ErrorCode.REFUND_AMOUNT_EXCEEDS_AVAILABLE,
+          message: `Refund amount ${refundAmount.toString()} exceeds available ${remaining.toString()} (payment ${payment.amount.toString()} - already-refunded ${alreadyRefunded.toString()})`,
+        },
+        HttpStatus.UNPROCESSABLE_ENTITY,
+      );
+    }
+
+    // Probe the provider. ZarinPal v1 throws REFUND_NOT_SUPPORTED_BY_PROVIDER,
+    // which is the manual-mode signal; any other failure is unexpected and
+    // re-thrown so it surfaces as a 5xx.
+    let providerSupportsAutoRefund = false;
+    try {
+      const result = await this.provider.refund({
+        providerReference: payment.providerReference ?? '',
+        amount: refundAmount,
+        reason: input.reason,
+      });
+      providerSupportsAutoRefund = result.refunded;
+    } catch (err) {
+      if (!isRefundNotSupportedError(err)) {
+        const message = err instanceof Error ? err.message : 'Unknown provider error';
+        this.logger.error(
+          `Provider refund failed for payment ${payment.id.toString()}: ${message}`,
+        );
+        throw err;
+      }
+      this.logger.debug(
+        `Provider does not support automated refund — falling back to manual mode for payment ${payment.id.toString()}`,
+      );
+    }
+
+    const refund = await this.prisma.refund.create({
+      data: {
+        paymentId: payment.id,
+        amount: refundAmount,
+        reason: input.reason,
+        status: providerSupportsAutoRefund ? RefundStatus.COMPLETED : RefundStatus.PENDING_MANUAL,
+        requestedByUserId: input.actorUserId,
+        completedAt: providerSupportsAutoRefund ? new Date() : null,
+      },
+    });
+
+    if (payment.purpose === 'wallet_topup') {
+      try {
+        const wallet = await this.wallets.findOrCreateForUser(payment.userId);
+        await this.ledger.debit({
+          walletId: wallet.id,
+          amount: refundAmount,
+          reference: `refund:${refund.id.toString()}`,
+          description: `Refund — payment #${payment.id.toString()}`,
+          metadata: { refundId: refund.id.toString(), paymentId: payment.id.toString() },
+        });
+      } catch (err) {
+        if (isInsufficientFundsError(err)) {
+          // CLAUDE: The Refund row stays so ops have an audit trail and can
+          // resolve manually (e.g., after the user adds funds). The
+          // alreadyRefunded calculation will count this row as well, which
+          // blocks accidental retries until the operation is finalised.
+          throw new HttpException(
+            {
+              code: ErrorCode.CANNOT_REFUND_INSUFFICIENT_BALANCE,
+              message:
+                'User wallet has insufficient balance to absorb the refund. Refund row created — admin must resolve manually.',
+            },
+            HttpStatus.UNPROCESSABLE_ENTITY,
+          );
+        }
+        throw err;
+      }
+    }
+
+    await this.notifications.dispatch({
+      userId: payment.userId,
+      type: NOTIFICATION_TYPES.PAYMENT_REFUNDED,
+      payload: { amount: refundAmount, paymentId: payment.id.toString() },
+      channels: ['IN_APP', 'SMS'],
+    });
+
+    return refund;
+  }
+
+  // CLAUDE: For MVP this endpoint is an ops confirmation — the wallet debit
+  // lands at refund-request time, so by the time admin marks the refund as
+  // COMPLETED the platform's internal ledger is already squared. The bank
+  // reference is recorded as the audit trail for the off-platform transfer.
+  async markRefundCompleted(input: MarkRefundCompletedInput): Promise<RefundRow> {
+    const refund = await this.prisma.refund.findUnique({ where: { id: input.refundId } });
+    if (!refund) {
+      throw new HttpException(
+        { code: ErrorCode.NOT_FOUND, message: 'Refund not found' },
+        HttpStatus.NOT_FOUND,
+      );
+    }
+    if (refund.status !== RefundStatus.PENDING_MANUAL) {
+      throw new HttpException(
+        {
+          code: ErrorCode.REFUND_NOT_PENDING,
+          message: `Refund cannot be marked completed from status ${refund.status}`,
+        },
+        HttpStatus.UNPROCESSABLE_ENTITY,
+      );
+    }
+
+    return this.prisma.refund.update({
+      where: { id: refund.id },
+      data: {
+        status: RefundStatus.COMPLETED,
+        completedAt: new Date(),
+        bankReference: input.bankReference,
+      },
+    });
+  }
+
+  async findRefundsForAdmin(filters: {
+    status?: RefundStatus | undefined;
+    paymentId?: bigint | undefined;
+    cursor?: bigint | undefined;
+    limit: number;
+  }): Promise<RefundPage> {
+    const take = filters.limit + 1;
+    const where: Prisma.RefundWhereInput = {};
+    if (filters.status) where.status = filters.status;
+    if (filters.paymentId) where.paymentId = filters.paymentId;
+    if (filters.cursor) where.id = { lt: filters.cursor };
+
+    const rows = await this.prisma.refund.findMany({
       where,
       orderBy: { id: 'desc' },
       take,

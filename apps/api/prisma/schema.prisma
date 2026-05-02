@@ -44,8 +44,9 @@ model User {
   files           File[]
   ledgerEntries   LedgerEntry[]
   payoutRequests  PayoutRequest[] @relation("PayoutRequester")
-  reviewedPayouts PayoutRequest[] @relation("PayoutReviewer")
-  payments        Payment[]
+  reviewedPayouts   PayoutRequest[] @relation("PayoutReviewer")
+  payments          Payment[]
+  requestedRefunds  Refund[]        @relation("RefundRequester")
 
   @@index([status])
   @@index([deletedAt])
@@ -367,7 +368,8 @@ model Payment {
   completedAt       DateTime?
   failureReason     String?       @db.VarChar(500)
 
-  user User @relation(fields: [userId], references: [id])
+  user    User     @relation(fields: [userId], references: [id])
+  refunds Refund[]
 
   @@index([userId])
   @@index([status])
@@ -381,4 +383,30 @@ enum PaymentStatus {
   FAILED
   CANCELLED
   EXPIRED
+}
+
+// ─── Refunds ─────────────────────────────────────────────────────────
+
+model Refund {
+  id                BigInt       @id @default(autoincrement())
+  paymentId         BigInt
+  amount            BigInt
+  reason            String       @db.VarChar(500)
+  status            RefundStatus @default(PENDING_MANUAL)
+  requestedByUserId BigInt
+  requestedAt       DateTime     @default(now())
+  completedAt       DateTime?
+  bankReference     String?      @db.VarChar(120)
+
+  payment   Payment @relation(fields: [paymentId], references: [id])
+  requester User    @relation("RefundRequester", fields: [requestedByUserId], references: [id])
+
+  @@index([paymentId])
+  @@index([status])
+  @@map("refunds")
+}
+
+enum RefundStatus {
+  PENDING_MANUAL
+  COMPLETED
 }

@@ -1,18 +1,21 @@
 import {
+  Body,
   Controller,
   Get,
   HttpCode,
   HttpException,
   HttpStatus,
   Param,
+  Patch,
   Post,
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { PaymentStatus } from '@prisma/client';
+import { PaymentStatus, RefundStatus } from '@prisma/client';
 import { Request } from 'express';
 import { z } from 'zod';
 
+import { AdminOnly } from '../../common/decorators/admin-only.decorator';
 import { Audit } from '../../common/decorators/audit.decorator';
 import { Idempotent } from '../../common/decorators/idempotent.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
@@ -23,7 +26,7 @@ import { PermissionGuard } from '../../common/guards/permission.guard';
 import { ErrorCode } from '../../common/types/response.types';
 import { AUDIT_ACTIONS } from '../audit/actions.catalog';
 
-import { PaymentsService, type PaymentRow } from './payments.service';
+import { PaymentsService, type PaymentRow, type RefundRow } from './payments.service';
 
 type AuthRequest = Request & { user: AuthenticatedUser };
 
@@ -69,6 +72,37 @@ const AdminPaymentsQuerySchema = z.object({
 });
 type AdminPaymentsQuery = z.infer<typeof AdminPaymentsQuerySchema>;
 
+const RefundRequestSchema = z.object({
+  amount: z
+    .string()
+    .optional()
+    .transform((v): bigint | undefined => (v !== undefined ? BigInt(v) : undefined)),
+  reason: z.string().min(10).max(500),
+});
+type RefundRequestDto = z.infer<typeof RefundRequestSchema>;
+
+const MarkRefundCompletedSchema = z.object({
+  bankReference: z.string().min(1).max(120),
+});
+type MarkRefundCompletedDto = z.infer<typeof MarkRefundCompletedSchema>;
+
+const AdminRefundsQuerySchema = z.object({
+  status: z.nativeEnum(RefundStatus).optional(),
+  paymentId: z
+    .string()
+    .optional()
+    .transform((v): bigint | undefined => (v !== undefined ? BigInt(v) : undefined)),
+  cursor: z
+    .string()
+    .optional()
+    .transform((v): bigint | undefined => (v !== undefined ? BigInt(v) : undefined)),
+  limit: z
+    .string()
+    .optional()
+    .transform((v): number => Math.min(parseInt(v ?? '20', 10), 50)),
+});
+type AdminRefundsQuery = z.infer<typeof AdminRefundsQuerySchema>;
+
 // ──────── sanitization ────────
 
 function sanitizeForUser(payment: PaymentRow) {
@@ -95,6 +129,20 @@ function sanitizeForStatus(payment: PaymentRow) {
     amount: payment.amount,
     referenceCode: payment.referenceCode,
     completedAt: payment.completedAt,
+  };
+}
+
+function sanitizeRefundForAdmin(refund: RefundRow) {
+  return {
+    id: refund.id,
+    paymentId: refund.paymentId,
+    amount: refund.amount,
+    reason: refund.reason,
+    status: refund.status,
+    requestedByUserId: refund.requestedByUserId,
+    requestedAt: refund.requestedAt,
+    completedAt: refund.completedAt,
+    bankReference: refund.bankReference,
   };
 }
 
@@ -226,5 +274,118 @@ export class AdminPaymentsController {
         },
       },
     };
+  }
+
+  // SECURITY: Refunds reverse external money. AdminOnly stacks the
+  // admin:approve:payout permission with the X-Admin-Confirm header (S6),
+  // so a stolen admin token alone cannot mint refunds. @Idempotent prevents
+  // duplicate Refund rows when the operator double-submits the same form.
+  @Post(':paymentId/refund')
+  @AdminOnly({ confirmHeader: true, permission: 'admin:approve:payout' })
+  @Idempotent()
+  @Audit({
+    action: AUDIT_ACTIONS.PAYMENT_REFUND_REQUESTED,
+    resource: 'payment',
+    resourceIdParam: 'paymentId',
+  })
+  @HttpCode(HttpStatus.CREATED)
+  async refundPayment(
+    @Req() req: AuthRequest,
+    @Param('paymentId') paymentIdRaw: string,
+    @Body() rawBody: unknown,
+  ) {
+    const body = RefundRequestSchema.parse(rawBody) as RefundRequestDto;
+    const paymentId = this.parseId(paymentIdRaw);
+
+    const refundInput: {
+      paymentId: bigint;
+      reason: string;
+      actorUserId: bigint;
+      amount?: bigint;
+    } = {
+      paymentId,
+      reason: body.reason,
+      actorUserId: req.user.id,
+    };
+    if (body.amount !== undefined) refundInput.amount = body.amount;
+
+    const refund = await this.payments.refund(refundInput);
+    return sanitizeRefundForAdmin(refund);
+  }
+
+  private parseId(raw: string): bigint {
+    try {
+      return BigInt(raw);
+    } catch {
+      throw new HttpException(
+        { code: ErrorCode.NOT_FOUND, message: 'Payment not found' },
+        HttpStatus.NOT_FOUND,
+      );
+    }
+  }
+}
+
+// ──────── admin refunds controller ────────
+
+@UseGuards(JwtAuthGuard, PermissionGuard)
+@Controller('admin/refunds')
+export class AdminRefundsController {
+  constructor(private readonly payments: PaymentsService) {}
+
+  @Get()
+  @RequirePermission('admin:read:payouts')
+  async listRefunds(@ZodQuery(AdminRefundsQuerySchema) query: AdminRefundsQuery) {
+    const filters: {
+      status?: RefundStatus | undefined;
+      paymentId?: bigint | undefined;
+      cursor?: bigint | undefined;
+      limit: number;
+    } = { limit: query.limit };
+    if (query.status !== undefined) filters.status = query.status;
+    if (query.paymentId !== undefined) filters.paymentId = query.paymentId;
+    if (query.cursor !== undefined) filters.cursor = query.cursor;
+    const page = await this.payments.findRefundsForAdmin(filters);
+    return {
+      data: page.items.map(sanitizeRefundForAdmin),
+      meta: {
+        pagination: {
+          nextCursor: page.nextCursor?.toString() ?? undefined,
+          limit: query.limit,
+        },
+      },
+    };
+  }
+
+  @Patch(':id/mark-completed')
+  @AdminOnly({ confirmHeader: true, permission: 'admin:approve:payout' })
+  @Audit({
+    action: AUDIT_ACTIONS.PAYMENT_REFUND_COMPLETED,
+    resource: 'refund',
+    resourceIdParam: 'id',
+  })
+  async markRefundCompleted(
+    @Req() req: AuthRequest,
+    @Param('id') id: string,
+    @Body() rawBody: unknown,
+  ) {
+    const body = MarkRefundCompletedSchema.parse(rawBody) as MarkRefundCompletedDto;
+    const refundId = this.parseRefundId(id);
+    const refund = await this.payments.markRefundCompleted({
+      refundId,
+      bankReference: body.bankReference,
+      actorUserId: req.user.id,
+    });
+    return sanitizeRefundForAdmin(refund);
+  }
+
+  private parseRefundId(raw: string): bigint {
+    try {
+      return BigInt(raw);
+    } catch {
+      throw new HttpException(
+        { code: ErrorCode.NOT_FOUND, message: 'Refund not found' },
+        HttpStatus.NOT_FOUND,
+      );
+    }
   }
 }

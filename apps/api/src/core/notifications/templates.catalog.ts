@@ -64,6 +64,16 @@ export const NOTIFICATION_TEMPLATES: Record<string, NotificationTemplate> = {
     },
   },
 
+  PAYMENT_REFUNDED: {
+    inApp: {
+      title: 'بازگشت وجه',
+      body: (v) =>
+        `بازگشت وجه به مبلغ ${amt(v['amount'])} تومان درخواست شد و به‌زودی به حساب شما واریز می‌شود.`,
+    },
+    sms: (v) =>
+      `سازیکو: بازگشت وجه به مبلغ ${amt(v['amount'])} تومان درخواست شد و به‌زودی به حساب شما واریز می‌شود.`,
+  },
+
   WALLET_CREDITED: {
     inApp: {
       title: 'افزایش موجودی',
