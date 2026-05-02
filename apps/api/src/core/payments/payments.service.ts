@@ -188,6 +188,14 @@ export class PaymentsService {
     });
 
     if (verification.verified) {
+      // CLAUDE: The Payment update lives in an outer $transaction so the
+      // SUCCEEDED state flip is atomic. The reconciler is invoked from
+      // inside the callback (per the 10D plan) but does its ledger work
+      // through LedgerService — which opens its own inner transaction.
+      // Any drift between Payment.status and ledger entry presence is
+      // caught by the reconciler's idempotency check on the
+      // `payment:<id>` reference, so retries (whether automatic or via a
+      // manual reconcile sweep) cannot double-credit.
       await this.prisma.$transaction(async (tx) => {
         await tx.payment.update({
           where: { id: payment.id },
@@ -198,7 +206,7 @@ export class PaymentsService {
             cardPanMasked: verification.cardPan ?? null,
           },
         });
-        await this.reconciler.reconcile(tx, payment.id);
+        await this.reconciler.reconcile(payment.id);
       });
 
       await this.notifications.dispatch({

@@ -1,4 +1,14 @@
-import { Controller, Get, HttpCode, HttpStatus, Param, Post, Req, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  HttpCode,
+  HttpException,
+  HttpStatus,
+  Param,
+  Post,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { PaymentStatus } from '@prisma/client';
 import { Request } from 'express';
 import { z } from 'zod';
@@ -10,6 +20,7 @@ import { ZodBody } from '../../common/decorators/zod-body.decorator';
 import { ZodQuery } from '../../common/decorators/zod-query.decorator';
 import { JwtAuthGuard, AuthenticatedUser } from '../../common/guards/jwt-auth.guard';
 import { PermissionGuard } from '../../common/guards/permission.guard';
+import { ErrorCode } from '../../common/types/response.types';
 import { AUDIT_ACTIONS } from '../audit/actions.catalog';
 
 import { PaymentsService, type PaymentRow } from './payments.service';
@@ -69,6 +80,20 @@ function sanitizeForUser(payment: PaymentRow) {
     status: payment.status,
     referenceCode: payment.referenceCode,
     initiatedAt: payment.initiatedAt,
+    completedAt: payment.completedAt,
+  };
+}
+
+// Minimal projection for the polling endpoint — modules and the frontend
+// only need the lifecycle marker (status) plus the bank receipt code once
+// the payment has settled. providerReference, cardPan, and failureReason
+// are intentionally omitted.
+function sanitizeForStatus(payment: PaymentRow) {
+  return {
+    id: payment.id,
+    status: payment.status,
+    amount: payment.amount,
+    referenceCode: payment.referenceCode,
     completedAt: payment.completedAt,
   };
 }
@@ -147,6 +172,28 @@ export class PaymentsController {
   async getMyPayment(@Req() req: AuthRequest, @Param('id') id: string) {
     const payment = await this.payments.findById(BigInt(id), req.user.id);
     return sanitizeForUser(payment);
+  }
+
+  // SECURITY: ownership is enforced by passing req.user.id into findById,
+  // which returns NOT_FOUND (not FORBIDDEN) for non-owned payments to
+  // avoid leaking the existence of payments belonging to other users.
+  @Get('payments/:paymentId/status')
+  @RequirePermission('users:read:profile_self')
+  async getPaymentStatus(@Req() req: AuthRequest, @Param('paymentId') paymentIdRaw: string) {
+    const paymentId = this.parseId(paymentIdRaw);
+    const payment = await this.payments.findById(paymentId, req.user.id);
+    return sanitizeForStatus(payment);
+  }
+
+  private parseId(raw: string): bigint {
+    try {
+      return BigInt(raw);
+    } catch {
+      throw new HttpException(
+        { code: ErrorCode.NOT_FOUND, message: 'Payment not found' },
+        HttpStatus.NOT_FOUND,
+      );
+    }
   }
 }
 

@@ -436,15 +436,13 @@ describe('PaymentsService', () => {
       const provider = buildProvider({
         verify: opts.verifyThrows
           ? jest.fn().mockRejectedValue(opts.verifyThrows)
-          : jest
-              .fn()
-              .mockResolvedValue(
-                opts.verifyResponse ?? {
-                  verified: true,
-                  referenceCode: 'BANK-1',
-                  cardPan: '****1234',
-                },
-              ),
+          : jest.fn().mockResolvedValue(
+              opts.verifyResponse ?? {
+                verified: true,
+                referenceCode: 'BANK-1',
+                cardPan: '****1234',
+              },
+            ),
       });
       const notifications = buildNotifications();
       const reconciler = buildReconciler();
@@ -475,7 +473,7 @@ describe('PaymentsService', () => {
 
       expect(result.status).toBe(PaymentStatus.SUCCEEDED);
       expect(prisma.$transaction).toHaveBeenCalled();
-      expect(reconciler.reconcile).toHaveBeenCalledWith(expect.anything(), 7n);
+      expect(reconciler.reconcile).toHaveBeenCalledWith(7n);
       expect(notifications.dispatch).toHaveBeenCalledWith(
         expect.objectContaining({
           userId: 1n,
