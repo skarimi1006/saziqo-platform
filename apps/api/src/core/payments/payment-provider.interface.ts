@@ -15,8 +15,8 @@ export interface InitiateInput {
   description: string;
   callbackUrl: string;
   referenceId: string;
-  userMobile?: string;
-  userEmail?: string;
+  userMobile?: string | undefined;
+  userEmail?: string | undefined;
 }
 
 export interface InitiateOutput {

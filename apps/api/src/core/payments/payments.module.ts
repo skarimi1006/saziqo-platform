@@ -3,15 +3,15 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '../../config/config.service';
 
 import { PAYMENT_PROVIDER, type PaymentProvider } from './payment-provider.interface';
+import { AdminPaymentsController, PaymentsController } from './payments.controller';
+import { PaymentsService } from './payments.service';
 import { ConsolePaymentProvider } from './providers/console.provider';
 import { ZarinPalProvider } from './providers/zarinpal.provider';
 
-// CLAUDE: PaymentProvider is bound under the PAYMENT_PROVIDER token so
-// callers depend on the interface, not the concrete adapter. The factory
-// reads PAYMENT_PROVIDER at module init — switching adapters at runtime
-// requires an app restart, which is intentional.
 @Module({
+  controllers: [PaymentsController, AdminPaymentsController],
   providers: [
+    PaymentsService,
     ConsolePaymentProvider,
     ZarinPalProvider,
     {
@@ -33,6 +33,6 @@ import { ZarinPalProvider } from './providers/zarinpal.provider';
       },
     },
   ],
-  exports: [PAYMENT_PROVIDER],
+  exports: [PAYMENT_PROVIDER, PaymentsService],
 })
 export class PaymentsModule {}

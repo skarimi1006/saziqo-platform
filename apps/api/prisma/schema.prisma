@@ -45,6 +45,7 @@ model User {
   ledgerEntries   LedgerEntry[]
   payoutRequests  PayoutRequest[] @relation("PayoutRequester")
   reviewedPayouts PayoutRequest[] @relation("PayoutReviewer")
+  payments        Payment[]
 
   @@index([status])
   @@index([deletedAt])
@@ -346,4 +347,38 @@ enum PayoutStatus {
   REJECTED
   PAID
   CANCELLED
+}
+
+// ─── Payments ────────────────────────────────────────────────────────
+
+model Payment {
+  id                BigInt        @id @default(autoincrement())
+  userId            BigInt
+  amount            BigInt
+  purpose           String        @db.VarChar(50)
+  description       String        @db.VarChar(500)
+  status            PaymentStatus @default(PENDING)
+  providerName      String        @db.VarChar(40)
+  providerReference String?       @db.VarChar(120)
+  referenceCode     String?       @db.VarChar(120)
+  cardPanMasked     String?       @db.VarChar(20)
+  metadata          Json
+  initiatedAt       DateTime      @default(now())
+  completedAt       DateTime?
+  failureReason     String?       @db.VarChar(500)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+  @@index([providerReference])
+  @@map("payments")
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  EXPIRED
 }
