@@ -57,6 +57,13 @@ export const NOTIFICATION_TEMPLATES: Record<string, NotificationTemplate> = {
     },
   },
 
+  PAYMENT_CANCELLED: {
+    inApp: {
+      title: 'پرداخت لغو شد',
+      body: () => 'پرداخت توسط شما لغو شد.',
+    },
+  },
+
   WALLET_CREDITED: {
     inApp: {
       title: 'افزایش موجودی',

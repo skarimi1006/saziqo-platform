@@ -3,8 +3,11 @@ import { PaymentStatus, Prisma } from '@prisma/client';
 
 import { ErrorCode } from '../../common/types/response.types';
 import { ConfigService } from '../../config/config.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NOTIFICATION_TYPES } from '../notifications/types.catalog';
 import { PrismaService } from '../prisma/prisma.service';
 
+import { PaymentLedgerReconciler } from './payment-ledger.reconciler';
 import { PAYMENT_PROVIDER, type PaymentProvider } from './payment-provider.interface';
 
 const PURPOSE_PATTERN = /^[a-z_]+(:.+)?$/;
@@ -21,6 +24,24 @@ export interface InitiateResult {
   paymentId: bigint;
   redirectUrl: string;
 }
+
+export interface HandleCallbackInput {
+  paymentId: bigint;
+  providerReference: string;
+  providerStatus: 'OK' | 'NOK';
+}
+
+export interface HandleCallbackResult {
+  paymentId: bigint;
+  status: PaymentStatus;
+}
+
+const TERMINAL_STATUSES: ReadonlySet<PaymentStatus> = new Set([
+  PaymentStatus.SUCCEEDED,
+  PaymentStatus.FAILED,
+  PaymentStatus.CANCELLED,
+  PaymentStatus.EXPIRED,
+]);
 
 export interface PaymentRow {
   id: bigint;
@@ -52,6 +73,8 @@ export class PaymentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly notifications: NotificationsService,
+    private readonly reconciler: PaymentLedgerReconciler,
     @Inject(PAYMENT_PROVIDER) private readonly provider: PaymentProvider,
   ) {}
 
@@ -116,6 +139,95 @@ export class PaymentsService {
     });
 
     return { paymentId: payment.id, redirectUrl: result.redirectUrl };
+  }
+
+  // SECURITY: This is the highest-stakes endpoint in the system. The verify
+  // call to the gateway is the integrity check (no HMAC on the redirect),
+  // so we additionally enforce that the Authority param matches the
+  // providerReference we stored at initiation. A forged callback for a
+  // different payment is rejected with INVALID_CALLBACK before any state
+  // change. Idempotency is provided by the early-return on terminal status,
+  // since GET callbacks have no Idempotency-Key header.
+  async handleCallback(input: HandleCallbackInput): Promise<HandleCallbackResult> {
+    const payment = await this.prisma.payment.findUnique({ where: { id: input.paymentId } });
+    if (!payment) {
+      throw new HttpException(
+        { code: ErrorCode.NOT_FOUND, message: 'Payment not found' },
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    if (TERMINAL_STATUSES.has(payment.status)) {
+      return { paymentId: payment.id, status: payment.status };
+    }
+
+    if (payment.providerReference !== input.providerReference) {
+      throw new HttpException(
+        { code: ErrorCode.INVALID_CALLBACK, message: 'Callback authority does not match payment' },
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    if (input.providerStatus === 'NOK') {
+      await this.prisma.payment.update({
+        where: { id: payment.id },
+        data: { status: PaymentStatus.CANCELLED, completedAt: new Date() },
+      });
+      await this.notifications.dispatch({
+        userId: payment.userId,
+        type: NOTIFICATION_TYPES.PAYMENT_CANCELLED,
+        payload: { amount: payment.amount },
+        channels: ['IN_APP'],
+      });
+      return { paymentId: payment.id, status: PaymentStatus.CANCELLED };
+    }
+
+    const verification = await this.provider.verify({
+      providerReference: input.providerReference,
+      expectedAmount: payment.amount,
+    });
+
+    if (verification.verified) {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.payment.update({
+          where: { id: payment.id },
+          data: {
+            status: PaymentStatus.SUCCEEDED,
+            completedAt: new Date(),
+            referenceCode: verification.referenceCode ?? null,
+            cardPanMasked: verification.cardPan ?? null,
+          },
+        });
+        await this.reconciler.reconcile(tx, payment.id);
+      });
+
+      await this.notifications.dispatch({
+        userId: payment.userId,
+        type: NOTIFICATION_TYPES.PAYMENT_SUCCEEDED,
+        payload: { amount: payment.amount, reference: verification.referenceCode ?? '' },
+        channels: ['IN_APP', 'SMS'],
+      });
+
+      return { paymentId: payment.id, status: PaymentStatus.SUCCEEDED };
+    }
+
+    const failureReason = (verification.failureReason ?? 'Verification failed').slice(0, 500);
+    await this.prisma.payment.update({
+      where: { id: payment.id },
+      data: {
+        status: PaymentStatus.FAILED,
+        completedAt: new Date(),
+        failureReason,
+      },
+    });
+    await this.notifications.dispatch({
+      userId: payment.userId,
+      type: NOTIFICATION_TYPES.PAYMENT_FAILED,
+      payload: { amount: payment.amount },
+      channels: ['IN_APP'],
+    });
+
+    return { paymentId: payment.id, status: PaymentStatus.FAILED };
   }
 
   async findById(id: bigint, userId?: bigint): Promise<PaymentRow> {

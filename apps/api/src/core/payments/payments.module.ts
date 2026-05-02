@@ -1,17 +1,22 @@
 import { Module } from '@nestjs/common';
 
 import { ConfigService } from '../../config/config.service';
+import { NotificationsModule } from '../notifications/notifications.module';
 
+import { PaymentLedgerReconciler } from './payment-ledger.reconciler';
 import { PAYMENT_PROVIDER, type PaymentProvider } from './payment-provider.interface';
+import { PaymentsCallbackController } from './payments-callback.controller';
 import { AdminPaymentsController, PaymentsController } from './payments.controller';
 import { PaymentsService } from './payments.service';
 import { ConsolePaymentProvider } from './providers/console.provider';
 import { ZarinPalProvider } from './providers/zarinpal.provider';
 
 @Module({
-  controllers: [PaymentsController, AdminPaymentsController],
+  imports: [NotificationsModule],
+  controllers: [PaymentsController, AdminPaymentsController, PaymentsCallbackController],
   providers: [
     PaymentsService,
+    PaymentLedgerReconciler,
     ConsolePaymentProvider,
     ZarinPalProvider,
     {
@@ -33,6 +38,6 @@ import { ZarinPalProvider } from './providers/zarinpal.provider';
       },
     },
   ],
-  exports: [PAYMENT_PROVIDER, PaymentsService],
+  exports: [PAYMENT_PROVIDER, PaymentsService, PaymentLedgerReconciler],
 })
 export class PaymentsModule {}
