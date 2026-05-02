@@ -55,8 +55,10 @@ export const envSchema = z.object({
   KAVENEGAR_SENDER_LINE: z.string().optional(),
 
   // Payments
+  PAYMENT_PROVIDER: z.enum(['zarinpal', 'console']).default('console'),
   ZARINPAL_MERCHANT_ID: z.string().optional(),
   ZARINPAL_SANDBOX: z.coerce.boolean().default(true),
+  ZARINPAL_CALLBACK_URL: z.string().optional(),
 
   // File storage
   // SECURITY: FILE_STORAGE_ROOT is the canonical absolute or relative root
