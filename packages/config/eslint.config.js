@@ -4,7 +4,14 @@ import importPlugin from 'eslint-plugin-import-x';
 
 export default tseslint.config(
   {
-    ignores: ['**/node_modules/**', '**/dist/**', '**/.next/**', '**/build/**', '**/.turbo/**'],
+    ignores: [
+      '**/node_modules/**',
+      '**/dist/**',
+      '**/.next/**',
+      '**/build/**',
+      '**/.turbo/**',
+      '**/next-env.d.ts',
+    ],
   },
   {
     files: ['**/*.ts', '**/*.tsx'],
