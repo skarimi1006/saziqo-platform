@@ -42,7 +42,7 @@ function persianMessageForOtpError(err: ApiError): string {
   }
 }
 
-function VerifyForm({ phone }: { phone: string }) {
+function VerifyForm({ phone, autoSubmit }: { phone: string; autoSubmit?: boolean }) {
   const router = useRouter();
   const [code, setCode] = useState('');
   const [countdown, setCountdown] = useState(OTP_TTL_SECONDS);
@@ -86,6 +86,10 @@ function VerifyForm({ phone }: { phone: string }) {
     },
     [phone, router],
   );
+
+  useEffect(() => {
+    if (autoSubmit) void handleVerify('000000');
+  }, [autoSubmit, handleVerify]);
 
   function handleChange(next: string) {
     const latin = toLatinDigits(next);
@@ -181,6 +185,7 @@ function VerifyPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const phone = searchParams.get('phone') ?? '';
+  const autoSubmit = searchParams.get('dev') === '1';
   const [validated, setValidated] = useState(false);
 
   useEffect(() => {
@@ -192,7 +197,7 @@ function VerifyPageInner() {
   }, [phone, router]);
 
   if (!validated) return null;
-  return <VerifyForm phone={phone} />;
+  return <VerifyForm phone={phone} autoSubmit={autoSubmit} />;
 }
 
 export default function VerifyPage() {

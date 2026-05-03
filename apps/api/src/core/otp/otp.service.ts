@@ -147,6 +147,8 @@ export class OtpService {
   // ──────── private helpers ────────
 
   private generateCode(): string {
+    // SECURITY: Fixed code for local dev only — never reaches this branch in production.
+    if (this.config.isDevelopment) return '000000';
     // crypto.randomInt(min, max) is upper-exclusive, so 1_000_000 is needed
     // to include 999999 in the output range.
     return String(crypto.randomInt(100_000, 1_000_000));

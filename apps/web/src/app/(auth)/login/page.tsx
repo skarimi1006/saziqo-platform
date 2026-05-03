@@ -12,6 +12,9 @@ import { Label } from '@/components/ui/label';
 import apiClient, { ApiError } from '@/lib/api-client';
 import { generateIdempotencyKey } from '@/lib/idempotency';
 
+const DEV_PHONE = '09123456789';
+const IS_DEV = process.env.NODE_ENV === 'development';
+
 type ValidationState = 'empty' | 'invalid' | 'valid';
 
 function getValidationState(value: string): ValidationState {
@@ -85,6 +88,31 @@ export default function LoginPage() {
     }
   }
 
+  async function handleDevLogin() {
+    setPhone(DEV_PHONE);
+    setLoading(true);
+    try {
+      await apiClient.post(
+        '/auth/otp/request',
+        { phone: normalizeIranianPhone(DEV_PHONE) },
+        { skipAuth: true, idempotencyKey: generateIdempotencyKey() },
+      );
+      router.push(
+        `/login/verify?phone=${encodeURIComponent(normalizeIranianPhone(DEV_PHONE)!)}&dev=1`,
+      );
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'OTP_RATE_LIMITED') {
+        router.push(
+          `/login/verify?phone=${encodeURIComponent(normalizeIranianPhone(DEV_PHONE)!)}&dev=1`,
+        );
+      } else {
+        toast.error('dev login failed');
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
     <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-6">
       <div className="flex flex-col gap-1.5">
@@ -136,6 +164,20 @@ export default function LoginPage() {
           'دریافت کد تأیید'
         )}
       </Button>
+
+      {IS_DEV && (
+        <div className="rounded-lg border border-yellow-300 bg-yellow-50 p-3">
+          <p className="mb-2 text-xs font-medium text-yellow-800">حالت توسعه — کد همیشه ۰۰۰۰۰۰</p>
+          <button
+            type="button"
+            onClick={() => void handleDevLogin()}
+            disabled={loading}
+            className="w-full rounded bg-yellow-400 px-3 py-1.5 text-xs font-semibold text-yellow-900 hover:bg-yellow-500 disabled:opacity-50"
+          >
+            ورود سریع با super_admin ({DEV_PHONE})
+          </button>
+        </div>
+      )}
     </form>
   );
 }
