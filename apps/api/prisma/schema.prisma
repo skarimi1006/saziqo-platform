@@ -410,3 +410,20 @@ enum RefundStatus {
   PENDING_MANUAL
   COMPLETED
 }
+
+// ─── Module Registry ─────────────────────────────────────────────────
+
+// CLAUDE: Tracks which platform modules have completed their first-boot
+// onInstall hook. The Phase-11B module loader inserts a row the first time
+// it sees a module name; on subsequent boots the row's presence short-
+// circuits onInstall so it never runs twice. `version` records the version
+// that performed the install — modules can compare it to their current
+// version to decide whether a re-install/migration is needed.
+model ModuleInstall {
+  id          BigInt   @id @default(autoincrement())
+  name        String   @unique @db.VarChar(60)
+  version     String   @db.VarChar(20)
+  installedAt DateTime @default(now())
+
+  @@map("modules_installed")
+}
