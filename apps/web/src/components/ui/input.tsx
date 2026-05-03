@@ -1,3 +1,12 @@
+// CLAUDE: RTL note — text inputs respect the inherited `dir` from <html>,
+// so cursor, selection, and placeholder all flow right-to-left for
+// Persian content automatically. The exception is *digit-only* inputs
+// (phone numbers, OTP codes, currency amounts) which read better LTR
+// even on an RTL page so the digits group naturally. Pass `dir="ltr"`
+// on those specific instances at the call site — keeping the default
+// here `rtl` (inherited) means body-of-text inputs (name, address,
+// notes) Just Work without per-call configuration.
+
 import * as React from 'react';
 
 import { cn } from '@/lib/utils';

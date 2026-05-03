@@ -1,3 +1,14 @@
+// CLAUDE: RTL note — Button uses `inline-flex … gap-2`, and flexbox + gap
+// already mirror correctly under `dir="rtl"` (source-order first child
+// renders on the right, last child on the left). So an icon written as
+// `<Button><Save /> ذخیره</Button>` lands with the icon to the right of
+// the label without any explicit flex-row-reverse. The `[&_svg]:shrink-0`
+// rule we keep is direction-agnostic.
+//
+// If a caller ever needs LTR ordering inside an RTL page (e.g. a flag
+// that must always sit on the visual left), set `dir="ltr"` on that
+// specific Button instance.
+
 import { Slot } from '@radix-ui/react-slot';
 import { cva, type VariantProps } from 'class-variance-authority';
 import * as React from 'react';
