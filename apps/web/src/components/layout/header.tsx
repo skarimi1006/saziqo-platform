@@ -1,8 +1,10 @@
 'use client';
 
-import { UserIcon } from 'lucide-react';
-
 import { MobileMenu } from './mobile-menu';
+
+import { Logo } from '@/components/brand/logo';
+import { UserMenu } from '@/components/user-menu/user-menu';
+
 
 export function Header() {
   return (
@@ -10,15 +12,11 @@ export function Header() {
       {/* Start side (visual right in RTL): hamburger + logo */}
       <div className="flex items-center gap-2">
         <MobileMenu />
-        <span className="text-lg font-bold text-primary">سازیکو</span>
+        <Logo size="md" variant="dark" />
       </div>
 
-      {/* End side (visual left in RTL): user placeholder */}
-      <div className="flex items-center gap-2">
-        <div className="flex size-8 items-center justify-center rounded-full bg-muted">
-          <UserIcon className="size-4 text-muted-foreground" />
-        </div>
-      </div>
+      {/* End side (visual left in RTL): user menu */}
+      <UserMenu />
     </header>
   );
 }
