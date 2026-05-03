@@ -29,12 +29,8 @@ import {
 // (descriptor.value), not on (target, propertyKey). The Reflector at
 // runtime reads context.getHandler() which is exactly that function — we
 // mirror it here.
-function getMeta<T = unknown>(
-  key: string,
-  proto: { [k: string]: unknown },
-  propertyKey: string,
-): T | undefined {
-  const method = proto[propertyKey];
+function getMeta<T = unknown>(key: string, proto: object, propertyKey: string): T | undefined {
+  const method = (proto as Record<string, unknown>)[propertyKey];
   if (typeof method !== 'function') return undefined;
   return Reflect.getMetadata(key, method) as T | undefined;
 }

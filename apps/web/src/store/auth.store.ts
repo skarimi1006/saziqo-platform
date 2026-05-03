@@ -102,6 +102,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       get().clearAuth();
     } finally {
       set({ isLoading: false });
+      // Test Gate 12 marker — observable signal that bootstrap completed
+      // (regardless of auth outcome). Kept as `console.log` so dev tools
+      // surface it; suppressed in release builds via the marker strip.
+      // eslint-disable-next-line no-console
+      console.log('[auth] bootstrap done');
     }
   },
 

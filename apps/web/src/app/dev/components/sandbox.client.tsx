@@ -6,8 +6,9 @@
 // aid. Add new primitives here as they're installed.
 
 import { Save, Settings, User as UserIcon } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
+
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -55,9 +56,41 @@ import {
 import { Toaster } from '@/components/ui/sonner';
 import { Switch } from '@/components/ui/switch';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import apiClient, { ApiError } from '@/lib/api-client';
+
+type HealthState =
+  | { status: 'idle' }
+  | { status: 'pending' }
+  | { status: 'ok'; payload: unknown }
+  | { status: 'error'; message: string };
 
 export function ComponentSandboxClient() {
   const [switchOn, setSwitchOn] = useState(false);
+  const [health, setHealth] = useState<HealthState>({ status: 'idle' });
+
+  useEffect(() => {
+    let cancelled = false;
+    setHealth({ status: 'pending' });
+    apiClient
+      .get<unknown>('/health', { skipAuth: true })
+      .then((res) => {
+        if (cancelled) return;
+        setHealth({ status: 'ok', payload: res.data });
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        const message =
+          err instanceof ApiError
+            ? `${err.status} ${err.code}: ${err.message}`
+            : err instanceof Error
+              ? err.message
+              : String(err);
+        setHealth({ status: 'error', message });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <main className="container mx-auto max-w-4xl space-y-12 p-8">
@@ -67,6 +100,28 @@ export function ComponentSandboxClient() {
           صفحه‌ی فقط-توسعه برای بررسی چشمی رفتار راست‌به‌چپ هر کامپوننت shadcn.
         </p>
       </header>
+
+      <section data-testid="health-check" className="rounded-lg border p-4" dir="ltr">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+          API health
+        </h2>
+        {health.status === 'idle' && <p className="mt-2 text-sm">idle</p>}
+        {health.status === 'pending' && (
+          <p className="mt-2 text-sm" data-state="pending">
+            calling GET /api/v1/health …
+          </p>
+        )}
+        {health.status === 'ok' && (
+          <p className="mt-2 text-sm text-green-600" data-state="ok">
+            ok — {JSON.stringify(health.payload)}
+          </p>
+        )}
+        {health.status === 'error' && (
+          <p className="mt-2 text-sm text-red-600" data-state="error">
+            error — {health.message}
+          </p>
+        )}
+      </section>
 
       <section className="space-y-3">
         <h2 className="text-xl font-semibold">دکمه</h2>
