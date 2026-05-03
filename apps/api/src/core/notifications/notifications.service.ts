@@ -6,8 +6,18 @@ import { EmailService } from '../email/email.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SmsService } from '../sms/sms.service';
 
-import { NOTIFICATION_TEMPLATES } from './templates.catalog';
+import { NOTIFICATION_TEMPLATES, type NotificationTemplate } from './templates.catalog';
 import { NON_PERSISTENT_TYPES } from './types.catalog';
+
+// CLAUDE: Template definition shape used by the module registry. The
+// registry passes its NotificationTypeDefinition through registerType()
+// below, which adapts it to the internal NotificationTemplate shape.
+export interface RegisterableNotificationType {
+  type: string;
+  inApp?: { titleFa: string; bodyFa: (vars: Record<string, unknown>) => string };
+  sms?: (vars: Record<string, unknown>) => string;
+  email?: { subject: string; textBody: (vars: Record<string, unknown>) => string };
+}
 
 export type NotificationChannelInput = 'IN_APP' | 'SMS' | 'EMAIL';
 
@@ -63,6 +73,9 @@ export interface NotificationView {
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
+  // Module-registered templates layered on top of NOTIFICATION_TEMPLATES.
+  // Lookup order at dispatch time: extension first, then static catalog.
+  private readonly extensionTemplates = new Map<string, NotificationTemplate>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -70,12 +83,30 @@ export class NotificationsService {
     private readonly emailService: EmailService,
   ) {}
 
+  // Called by ModuleRegistryService.mergeNotificationTypes() at boot.
+  // Idempotent: re-registering the same type overwrites the prior entry,
+  // so a module bumping its template content does not double-register.
+  registerType(def: RegisterableNotificationType): void {
+    if (NOTIFICATION_TEMPLATES[def.type]) {
+      this.logger.warn(
+        `Notification type ${def.type} collides with a core template — module override applied`,
+      );
+    }
+    const template: NotificationTemplate = {};
+    if (def.inApp) {
+      template.inApp = { title: def.inApp.titleFa, body: def.inApp.bodyFa };
+    }
+    if (def.sms) template.sms = def.sms;
+    if (def.email) template.email = def.email;
+    this.extensionTemplates.set(def.type, template);
+  }
+
   async dispatch(input: DispatchInput): Promise<DispatchResult> {
     const { userId, type, payload, channels } = input;
     const dispatched: NotificationChannelInput[] = [];
     const failures: DispatchFailure[] = [];
 
-    const template = NOTIFICATION_TEMPLATES[type];
+    const template = this.extensionTemplates.get(type) ?? NOTIFICATION_TEMPLATES[type];
     if (!template) {
       this.logger.warn(`No template defined for notification type: ${type} — skipping`);
       return { dispatched, failures };
@@ -209,7 +240,8 @@ export class NotificationsService {
   // using the NOTIFICATION_TEMPLATES catalog. Falls back to raw type string
   // when no inApp template is defined (should not happen for stored rows).
   renderForUser(notification: NotificationRow): NotificationView {
-    const template = NOTIFICATION_TEMPLATES[notification.type];
+    const template =
+      this.extensionTemplates.get(notification.type) ?? NOTIFICATION_TEMPLATES[notification.type];
     const payload = notification.payload as Record<string, unknown>;
 
     if (template?.inApp) {

@@ -14,6 +14,11 @@ import { PAYMENT_PROVIDER, type PaymentProvider } from './payment-provider.inter
 
 const PURPOSE_PATTERN = /^[a-z_]+(:.+)?$/;
 
+// Core purposes are always accepted regardless of which (if any) modules
+// have registered. ModuleRegistryService.mergePaymentPurposes() extends
+// this set with module-supplied purposes at boot.
+const CORE_PAYMENT_PURPOSES: ReadonlySet<string> = new Set(['wallet_topup']);
+
 // SECURITY: ZarinPal's refund() throws a plain Error tagged with the
 // REFUND_NOT_SUPPORTED_BY_PROVIDER code. We detect this string explicitly
 // so that any *other* provider error fails loudly and we don't silently
@@ -123,6 +128,12 @@ export interface RefundPage {
 @Injectable()
 export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
+  // Allow-list populated by ModuleRegistryService at boot. When non-empty,
+  // a purpose must be in CORE_PAYMENT_PURPOSES, the module-registered set,
+  // or match the legacy regex. The legacy regex remains as a safety net so
+  // pre-registry callers (and existing tests) continue to function until
+  // every consumer migrates to a registered purpose.
+  private moduleAllowedPurposes: ReadonlySet<string> = new Set();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -543,16 +554,24 @@ export class PaymentsService {
     return { items, nextCursor, hasMore };
   }
 
+  // Idempotent: called by ModuleRegistryService.mergePaymentPurposes() at
+  // boot with the merged set of purposes from every enabled module. Safe
+  // to call repeatedly; the latest call wins.
+  registerAllowedPurposes(purposes: readonly string[]): void {
+    this.moduleAllowedPurposes = new Set(purposes);
+  }
+
   private validatePurpose(purpose: string): void {
-    if (!PURPOSE_PATTERN.test(purpose)) {
-      throw new HttpException(
-        {
-          code: ErrorCode.VALIDATION_ERROR,
-          message: 'Invalid payment purpose format',
-        },
-        HttpStatus.BAD_REQUEST,
-      );
-    }
+    if (CORE_PAYMENT_PURPOSES.has(purpose)) return;
+    if (this.moduleAllowedPurposes.has(purpose)) return;
+    if (PURPOSE_PATTERN.test(purpose)) return;
+    throw new HttpException(
+      {
+        code: ErrorCode.VALIDATION_ERROR,
+        message: 'Invalid payment purpose',
+      },
+      HttpStatus.BAD_REQUEST,
+    );
   }
 
   private buildCallbackUrl(paymentId: bigint): string {

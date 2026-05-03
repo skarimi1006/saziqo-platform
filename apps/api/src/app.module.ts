@@ -12,6 +12,7 @@ import { AuditModule } from './core/audit/audit.module';
 import { FilesModule } from './core/files/files.module';
 import { HealthModule } from './core/health/health.module';
 import { ImpersonationModule } from './core/impersonation/impersonation.module';
+import { ModuleRegistryModule } from './core/module-registry/module-registry.module';
 import { NotificationsModule } from './core/notifications/notifications.module';
 import { PaymentsModule } from './core/payments/payments.module';
 import { PayoutsModule } from './core/payouts/payouts.module';
@@ -46,6 +47,7 @@ import { WalletsModule } from './core/wallets/wallets.module';
     WalletsModule,
     PayoutsModule,
     PaymentsModule,
+    ModuleRegistryModule,
   ],
   providers: [
     { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },
