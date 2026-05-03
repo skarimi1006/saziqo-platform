@@ -3,6 +3,7 @@ import type { Metadata } from 'next';
 import { vazirmatn } from './fonts';
 
 import { AuthBootstrap } from '@/components/auth/auth-bootstrap';
+import { Providers } from '@/components/providers';
 
 import './globals.css';
 
@@ -19,7 +20,9 @@ export default function RootLayout({
   return (
     <html lang="fa" dir="rtl" className={vazirmatn.variable}>
       <body className="font-sans antialiased">
-        <AuthBootstrap>{children}</AuthBootstrap>
+        <Providers>
+          <AuthBootstrap>{children}</AuthBootstrap>
+        </Providers>
       </body>
     </html>
   );
