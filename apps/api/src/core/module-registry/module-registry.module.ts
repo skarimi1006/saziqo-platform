@@ -1,11 +1,14 @@
 import { Global, Module } from '@nestjs/common';
 
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { PermissionGuard } from '../../common/guards/permission.guard';
 import { MODULES } from '../../modules.config';
 import { LedgerModule } from '../ledger/ledger.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PaymentsModule } from '../payments/payments.module';
 import { PrismaModule } from '../prisma/prisma.module';
 
+import { AdminRegistryController } from './admin-registry.controller';
 import { ModuleLoaderService } from './module-loader.service';
 import { MODULES_LIST } from './module-loader.tokens';
 import { ModuleRegistryService } from './module-registry.service';
@@ -27,10 +30,13 @@ import { ModuleRegistryService } from './module-registry.service';
 @Global()
 @Module({
   imports: [PrismaModule, NotificationsModule, PaymentsModule, LedgerModule],
+  controllers: [AdminRegistryController],
   providers: [
     ModuleRegistryService,
     ModuleLoaderService,
     { provide: MODULES_LIST, useValue: MODULES },
+    JwtAuthGuard,
+    PermissionGuard,
   ],
   exports: [ModuleRegistryService, ModuleLoaderService],
 })

@@ -3,14 +3,21 @@
 import { Header } from './header';
 import { Sidebar } from './sidebar';
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+interface AppShellProps {
+  children: React.ReactNode;
+  sidebar?: React.ReactNode;
+}
+
+export function AppShell({ children, sidebar }: AppShellProps) {
+  const sidebarContent = sidebar ?? <Sidebar />;
+
   return (
     <div className="min-h-screen">
       <Header />
 
       {/* Sidebar: fixed to start (visual right in RTL), below header */}
       <div className="fixed bottom-0 start-0 top-14 hidden w-64 border-e bg-sidebar md:block">
-        <Sidebar />
+        {sidebarContent}
       </div>
 
       {/* Main: offset by sidebar width on desktop */}

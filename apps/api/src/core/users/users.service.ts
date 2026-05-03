@@ -23,6 +23,19 @@ const STATUS_TRANSITIONS: Record<UserStatus, UserStatus[]> = {
   [UserStatus.DELETED]: [],
 };
 
+export interface SelfUserView {
+  id: bigint;
+  phone: string;
+  firstName: string | null;
+  lastName: string | null;
+  nationalId: string | null;
+  email: string | null;
+  status: UserStatus;
+  roles: string[];
+  permissions: string[];
+  createdAt: Date;
+}
+
 export interface AdminUserFilters {
   status?: UserStatus | undefined;
   roleId?: bigint | undefined;
@@ -156,6 +169,31 @@ export class UsersService {
     });
     if (!user) return null;
     return this.sanitizeForAdmin(user as UserWithDetails);
+  }
+
+  async findForSelf(userId: bigint): Promise<SelfUserView | null> {
+    const user = await this.repo.read().user.findUnique({
+      where: { id: userId },
+      include: {
+        userRoles: { include: { role: true } },
+      },
+    });
+    if (!user) return null;
+
+    const permissions = await this.permissions.getUserPermissions(userId);
+
+    return {
+      id: user.id,
+      phone: user.phone,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      nationalId: user.nationalId ? `******${user.nationalId.slice(-4)}` : null,
+      email: user.email,
+      status: user.status,
+      roles: user.userRoles.map((ur) => ur.role.name),
+      permissions,
+      createdAt: user.createdAt,
+    };
   }
 
   // ──────── Writes (always primary DB via repo.write()) ────────

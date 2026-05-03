@@ -4,8 +4,10 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionGuard } from '../../common/guards/permission.guard';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PrismaModule } from '../prisma/prisma.module';
+import { SessionsModule } from '../sessions/sessions.module';
 import { WalletsModule } from '../wallets/wallets.module';
 
+import { ProfileController } from './profile.controller';
 import { UsersController } from './users.controller';
 import { UsersRepository } from './users.repository';
 import { UsersService } from './users.service';
@@ -15,8 +17,8 @@ import { UsersService } from './users.service';
 // readers and keep this module self-describing.
 // RedisModule, RbacModule, ConfigModule are @Global — no explicit import needed.
 @Module({
-  imports: [PrismaModule, NotificationsModule, WalletsModule],
-  controllers: [UsersController],
+  imports: [PrismaModule, NotificationsModule, WalletsModule, SessionsModule],
+  controllers: [UsersController, ProfileController],
   providers: [UsersService, UsersRepository, JwtAuthGuard, PermissionGuard],
   exports: [UsersService],
 })

@@ -47,4 +47,17 @@ export class PermissionsService {
   async removeRoleFromUser(userId: bigint, roleId: bigint): Promise<void> {
     await this.prisma.userRole.deleteMany({ where: { userId, roleId } });
   }
+
+  async getUserPermissions(userId: bigint): Promise<string[]> {
+    const rolePermissions = await this.prisma.rolePermission.findMany({
+      where: {
+        role: {
+          userRoles: { some: { userId } },
+        },
+      },
+      select: { permission: { select: { code: true } } },
+    });
+    const codes = rolePermissions.map((rp) => rp.permission.code);
+    return Array.from(new Set(codes));
+  }
 }

@@ -25,6 +25,7 @@ export interface User {
   email: string | null;
   status: UserStatus;
   roles: string[];
+  permissions: string[];
   createdAt: string;
 }
 

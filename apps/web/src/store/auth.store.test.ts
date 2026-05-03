@@ -49,7 +49,6 @@ import { useAuthStore, type User } from './auth.store';
 
 import apiClient, { ApiError } from '@/lib/api-client';
 
-
 const mockedClient = apiClient as unknown as {
   get: ReturnType<typeof vi.fn>;
   post: ReturnType<typeof vi.fn>;
@@ -67,6 +66,7 @@ const ACTIVE_USER: User = {
   email: null,
   status: 'ACTIVE',
   roles: ['user'],
+  permissions: ['users:read:profile_self'],
   createdAt: '2026-01-01T00:00:00.000Z',
 };
 
