@@ -20,12 +20,17 @@
 //     mounted, no lifecycle hooks fired.
 
 import type { PlatformModule } from './core/module-registry/types';
+import exampleModule from './modules/_example';
 
 // import agentsModule from './modules/agents';
 // import buildersModule from './modules/builders';
 // import templatesModule from './modules/templates';
 
 export const MODULES: PlatformModule[] = [
+  // CLAUDE: Reference module — copy this skeleton for new business modules.
+  // Controlled via ENABLE_EXAMPLE_MODULE env var (default true in dev,
+  // false in production). Set ENABLE_EXAMPLE_MODULE=false in production.
+  exampleModule,
   // agentsModule,
   // buildersModule,
 ];
