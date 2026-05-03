@@ -47,11 +47,17 @@ export interface AuthState {
   refreshUser: () => Promise<void>;
 }
 
+// SECURITY/UX: isLoading defaults to true so guards on authenticated routes
+// (e.g. (account)/layout.tsx) wait for AuthBootstrap to run /auth/refresh
+// before deciding whether to redirect. Without this, the layout's effect
+// fires on first render with isAuthenticated=false and bounces the user to
+// /login even when the refresh cookie is valid. clearAuth() also resets to
+// isLoading: false so post-logout state is "not loading, not authed".
 const initialState = {
   accessToken: null,
   user: null,
   isAuthenticated: false,
-  isLoading: false,
+  isLoading: true,
   profileComplete: false,
   isImpersonating: false,
   impersonationActorId: null as string | null,
@@ -79,6 +85,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         skipAuth: true,
       });
       const token = refresh.data.accessToken;
+      // Persist the token before calling /users/me — api-client reads it from
+      // the store, not from local scope. Without this, the second request
+      // ships with no Authorization header and gets 401.
+      set({ accessToken: token });
       const me = await apiClient.get<User>('/users/me');
       const user = me.data;
       const { isImpersonating, impersonationActorId } = impersonationFromToken(token);
@@ -123,7 +133,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   clearAuth() {
-    set({ ...initialState });
+    // Reset everything but force isLoading=false. initialState defaults to
+    // true so guards wait for the app's first bootstrap run; clearAuth
+    // happens *after* bootstrap (or on logout), so it must not re-enter
+    // the loading state.
+    set({ ...initialState, isLoading: false });
   },
 
   async refreshUser() {
