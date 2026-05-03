@@ -3,7 +3,27 @@
 import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
 
+import { AppShell } from '@/components/layout/app-shell';
 import { useAuth } from '@/hooks/use-auth';
+
+function LoadingSkeleton() {
+  return (
+    <div className="min-h-screen animate-pulse">
+      {/* Header skeleton */}
+      <div className="fixed inset-x-0 top-0 z-40 h-14 border-b bg-muted" />
+      {/* Sidebar skeleton */}
+      <div className="fixed bottom-0 start-0 top-14 hidden w-64 border-e bg-muted md:block" />
+      {/* Content skeleton */}
+      <div className="pt-14 md:ms-64">
+        <div className="space-y-3 p-6">
+          <div className="h-8 w-48 rounded-lg bg-muted" />
+          <div className="h-4 w-full rounded bg-muted" />
+          <div className="h-4 w-3/4 rounded bg-muted" />
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function AccountLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -15,7 +35,8 @@ export default function AccountLayout({ children }: { children: React.ReactNode 
     }
   }, [isAuthenticated, isLoading, router]);
 
-  if (isLoading || !isAuthenticated) return null;
+  if (isLoading) return <LoadingSkeleton />;
+  if (!isAuthenticated) return null;
 
-  return <main className="container mx-auto max-w-2xl px-4 py-12">{children}</main>;
+  return <AppShell>{children}</AppShell>;
 }
