@@ -3,8 +3,8 @@
 import { MobileMenu } from './mobile-menu';
 
 import { Logo } from '@/components/brand/logo';
+import { NotificationsBell } from '@/components/notifications/notifications-bell';
 import { UserMenu } from '@/components/user-menu/user-menu';
-
 
 export function Header() {
   return (
@@ -15,8 +15,11 @@ export function Header() {
         <Logo size="md" variant="dark" />
       </div>
 
-      {/* End side (visual left in RTL): user menu */}
-      <UserMenu />
+      {/* End side (visual left in RTL): notifications + user menu */}
+      <div className="flex items-center gap-1">
+        <NotificationsBell />
+        <UserMenu />
+      </div>
     </header>
   );
 }
