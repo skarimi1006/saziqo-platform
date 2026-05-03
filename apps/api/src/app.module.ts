@@ -9,6 +9,7 @@ import { PinoLoggerModule } from './common/middleware/logger.middleware';
 import { RateLimitGuard } from './common/middleware/rate-limit.middleware';
 import { ConfigModule } from './config/config.module';
 import { AuditModule } from './core/audit/audit.module';
+import { AuthModule } from './core/auth/auth.module';
 import { FilesModule } from './core/files/files.module';
 import { HealthModule } from './core/health/health.module';
 import { ImpersonationModule } from './core/impersonation/impersonation.module';
@@ -70,6 +71,7 @@ const ENABLED_MODULE_IMPORTS: Type<unknown>[] = MODULES.filter((m) => m.enabled)
     PrismaModule,
     RedisModule,
     RbacModule,
+    AuthModule,
     AuditModule,
     FilesModule,
     HealthModule,

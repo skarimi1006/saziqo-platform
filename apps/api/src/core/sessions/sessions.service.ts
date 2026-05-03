@@ -249,6 +249,14 @@ export class SessionsService {
     return result.count;
   }
 
+  async revokeByRefreshToken(token: string): Promise<void> {
+    const hash = createHash('sha256').update(token).digest('hex');
+    await this.prisma.session.updateMany({
+      where: { refreshTokenHash: hash, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+  }
+
   async findActive(userId: bigint): Promise<Session[]> {
     return this.prisma.session.findMany({
       where: {

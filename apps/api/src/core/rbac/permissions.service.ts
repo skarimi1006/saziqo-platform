@@ -14,7 +14,7 @@ export class PermissionsService {
         role: {
           rolePermissions: {
             some: {
-              permission: { code: permission },
+              permission: { code: { in: [permission, 'super:everything'] } },
             },
           },
         },

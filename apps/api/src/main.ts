@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import './common/bigint-serialization';
 
 import { NestFactory } from '@nestjs/core';
+import cookieParser from 'cookie-parser';
 import { Logger as PinoLoggerService } from 'nestjs-pino';
 
 import { AppModule } from './app.module';
@@ -23,6 +24,7 @@ async function bootstrap(): Promise<void> {
   //   request-id → (pino-http via nestjs-pino auto-mw) → security headers → CORS
   // Globals (interceptor, filter, guard) are registered as APP_X providers
   // in AppModule so they apply identically in production and in tests.
+  app.use(cookieParser());
   const requestIdMw = new RequestIdMiddleware();
   app.use(requestIdMw.use.bind(requestIdMw));
 
