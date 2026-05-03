@@ -173,6 +173,9 @@ importers:
       '@radix-ui/react-tooltip':
         specifier: ^1.2.7
         version: 1.2.8(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@saziqo/persian-utils':
+        specifier: workspace:*
+        version: link:../../packages/persian-utils
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
