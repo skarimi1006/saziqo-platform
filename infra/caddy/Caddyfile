@@ -1,0 +1,57 @@
+# Caddyfile — saziqo platform production reverse proxy + TLS
+#
+# Phase 15B. Sits in front of the prod docker-compose stack:
+#   - NestJS API on localhost:3001 (/api/*)
+#   - Next.js web on localhost:3000 (everything else)
+#
+# Caddy handles ACME (Let's Encrypt) automatically on first request once
+# DNS resolves to this host. No manual cert management needed.
+#
+# Note on CSP:
+#   - 'unsafe-inline' on script-src / style-src is required for Next.js's
+#     inline runtime. Tighten with nonces in v1.5.
+#   - connect-src includes https://api.zarinpal.com as defense in depth.
+#     Today the NestJS server-side calls ZarinPal (server-to-server, not
+#     browser-originated), and the user's hand-off to the gateway is a
+#     full-page redirect (form-action covers it). If a future frontend
+#     ever calls ZarinPal directly via XHR, this directive is already in
+#     place.
+#   - form-action allows https://www.zarinpal.com so the payment hand-off
+#     POST is not blocked by the browser's CSP enforcement.
+
+app.saziqo.ir {
+	encode gzip zstd
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.zarinpal.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://www.zarinpal.com"
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 100mb
+			roll_keep 10
+		}
+		format json
+	}
+
+	# API → NestJS container on localhost:3001
+	handle_path /api/* {
+		reverse_proxy localhost:3001
+	}
+
+	# Frontend → Next.js container on localhost:3000
+	handle {
+		reverse_proxy localhost:3000
+	}
+}
+
+# Redirect www to apex
+www.app.saziqo.ir {
+	redir https://app.saziqo.ir{uri} permanent
+}
