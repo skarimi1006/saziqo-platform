@@ -61,3 +61,9 @@ fi
 
 STRIPPED_COUNT="$(wc -l < "${LOG_FILE}" | tr -d '[:space:]')"
 log "Stripped ${STRIPPED_COUNT} CLAUDE.md file(s) — see ${LOG_FILE}"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Step 3 — Strip CLAUDE: / REVIEW: comment markers from compiled JS (Phase 16B)
+# ──────────────────────────────────────────────────────────────────────────────
+log "Stripping CLAUDE/REVIEW comment markers from compiled JS"
+pnpm tsx infra/scripts/strip-comments.ts
