@@ -6,7 +6,8 @@ DEPLOY_HOST ?= app.saziqo.ir
 DEPLOY_USER ?= deploy
 
 .PHONY: dev-up dev-down dev-logs dev-reset db-shell redis-shell \
-        prod-build prod-logs prod-shell-api prod-db-shell harden help
+        prod-build prod-logs prod-shell-api prod-db-shell harden \
+        restore-drill help
 
 dev-up: ## Start all dev services in the background
 	$(COMPOSE_DEV) up -d
@@ -61,6 +62,10 @@ harden: ## Run infra/scripts/harden.sh on $(DEPLOY_USER)@$(DEPLOY_HOST)
 	@echo "About to harden $(DEPLOY_USER)@$(DEPLOY_HOST). Press Ctrl-C within 5s to abort."
 	@sleep 5
 	ssh -t $(DEPLOY_USER)@$(DEPLOY_HOST) 'sudo bash -s' < infra/scripts/harden.sh
+
+restore-drill: ## Run infra/scripts/restore-drill.sh on $(DEPLOY_USER)@$(DEPLOY_HOST)
+	ssh -t $(DEPLOY_USER)@$(DEPLOY_HOST) \
+		'/opt/saziqo-platform/current/infra/scripts/restore-drill.sh'
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
