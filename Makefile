@@ -1,8 +1,12 @@
 COMPOSE_DEV  := docker compose -f docker-compose.dev.yml
 COMPOSE_PROD := docker compose -f infra/docker/docker-compose.prod.yml --env-file /opt/saziqo-platform/current/.env.production
 
+# Override on the command line: `make harden DEPLOY_HOST=app.saziqo.ir`
+DEPLOY_HOST ?= app.saziqo.ir
+DEPLOY_USER ?= deploy
+
 .PHONY: dev-up dev-down dev-logs dev-reset db-shell redis-shell \
-        prod-build prod-logs prod-shell-api prod-db-shell help
+        prod-build prod-logs prod-shell-api prod-db-shell harden help
 
 dev-up: ## Start all dev services in the background
 	$(COMPOSE_DEV) up -d
@@ -45,6 +49,18 @@ prod-shell-api: ## Exec into the api container as nodejs
 
 prod-db-shell: ## Open a psql shell inside the prod Postgres container
 	$(COMPOSE_PROD) exec postgres psql -U $${POSTGRES_USER:-saziqo} -d $${POSTGRES_DB:-saziqo}
+
+# ─── One-off: run server hardening on the VPS ────────────────────────────────
+# Streams harden.sh from the local repo over ssh, executes it under sudo as
+# root on the remote host. Must be run from a workstation that already has
+# key-based ssh as the deploy user. After it runs, re-verify SSH from a NEW
+# terminal per docs/security.md before closing the session you triggered it
+# from.
+
+harden: ## Run infra/scripts/harden.sh on $(DEPLOY_USER)@$(DEPLOY_HOST)
+	@echo "About to harden $(DEPLOY_USER)@$(DEPLOY_HOST). Press Ctrl-C within 5s to abort."
+	@sleep 5
+	ssh -t $(DEPLOY_USER)@$(DEPLOY_HOST) 'sudo bash -s' < infra/scripts/harden.sh
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
