@@ -83,3 +83,6 @@ temp/
 # Release artifacts (Phase 16A, 16B)
 release-strip-log.txt
 comment-strip-log.txt
+
+# Security scan report (Phase 16E)
+scan-report.txt

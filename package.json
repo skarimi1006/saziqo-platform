@@ -21,6 +21,7 @@
     "release:build": "bash infra/scripts/release-build.sh",
     "release:build:api": "pnpm --filter api build && find apps/api/dist -name 'CLAUDE.md' -type f -delete",
     "release:build:web": "pnpm --filter web build && find apps/web/.next -name 'CLAUDE.md' -type f -delete",
+    "scan:deps": "bash infra/scripts/scan-deps.sh",
     "test:scripts": "node --import tsx --test infra/scripts/__tests__/*.spec.ts"
   },
   "pnpm": {

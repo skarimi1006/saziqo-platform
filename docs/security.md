@@ -166,6 +166,48 @@ Every reputable Iranian VPS provider exposes a web-based serial console (Arvan /
 
 ---
 
+## Vulnerability management
+
+### Tooling
+
+| Tool         | What it scans                    | Run via          |
+| ------------ | -------------------------------- | ---------------- |
+| `pnpm audit` | npm/pnpm dependency tree (CVEs)  | `pnpm scan:deps` |
+| Trivy        | Docker image OS and library CVEs | `pnpm scan:deps` |
+
+`pnpm scan:deps` runs both tools in sequence and saves the full report to `scan-report.txt` (git-ignored). `trivy` is installed on the VPS by `provision.sh`; running locally requires a local Trivy installation — missing Trivy skips image scans with a warning.
+
+### When to run
+
+- **Before every deploy** — `deploy.sh` calls `pnpm scan:deps` automatically (between the `pnpm audit` and `docker build` steps). Set `SKIP_SECURITY_SCAN=1` to bypass in exceptional cases.
+- **Monthly** — run `pnpm update` to pull in patched versions, then re-run `pnpm scan:deps` to confirm the fixes landed.
+
+### Triage policy
+
+| Severity        | Action                                                       |
+| --------------- | ------------------------------------------------------------ |
+| Critical / High | Block the deploy. Fix or pin a safe version before shipping. |
+| Moderate        | Open a GitHub issue; resolve within 2 weeks.                 |
+| Low             | Log it; no action required.                                  |
+
+### Updating dependencies
+
+```bash
+# Check what's outdated
+pnpm outdated
+
+# Update within declared semver ranges
+pnpm update
+
+# Update to latest majors (review changelogs first)
+pnpm update --latest
+
+# Re-run the scan after updating
+pnpm scan:deps
+```
+
+---
+
 ## When to re-run `harden.sh`
 
 - After any manual edit to `/etc/ssh/sshd_config` to put it back in known-good state.

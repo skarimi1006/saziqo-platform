@@ -6,6 +6,7 @@
 #   2. pnpm install --frozen-lockfile
 #   3. pnpm typecheck && pnpm lint && pnpm test
 #   4. pnpm audit --audit-level=high   (set FORCE_DEPLOY=1 to skip on fail)
+#   4b. pnpm scan:deps — trivy + moderate audit  (set SKIP_SECURITY_SCAN=1 to bypass)
 #   5. Build Docker images locally.
 #   6. Save images to a gzip tarball.
 #   7. rsync the repo + tarball to a timestamped release dir on the VPS.
@@ -20,10 +21,11 @@
 #     /opt/saziqo-platform/current/.env.production BEFORE the first run
 #
 # Environment variables (all have defaults):
-#   DEPLOY_HOST   — target VPS hostname/IP   (default: app.saziqo.ir)
-#   DEPLOY_USER   — SSH user                 (default: deploy)
-#   DEPLOY_BASE   — release root on VPS      (default: /opt/saziqo-platform)
-#   FORCE_DEPLOY  — set to 1 to bypass audit failures (default: 0)
+#   DEPLOY_HOST          — target VPS hostname/IP   (default: app.saziqo.ir)
+#   DEPLOY_USER          — SSH user                 (default: deploy)
+#   DEPLOY_BASE          — release root on VPS      (default: /opt/saziqo-platform)
+#   FORCE_DEPLOY         — set to 1 to bypass audit failures (default: 0)
+#   SKIP_SECURITY_SCAN   — set to 1 to skip scan:deps step  (default: 0)
 
 set -euo pipefail
 
@@ -34,6 +36,7 @@ DEPLOY_HOST="${DEPLOY_HOST:-app.saziqo.ir}"
 DEPLOY_USER="${DEPLOY_USER:-deploy}"
 DEPLOY_BASE="${DEPLOY_BASE:-/opt/saziqo-platform}"
 FORCE_DEPLOY="${FORCE_DEPLOY:-0}"
+SKIP_SECURITY_SCAN="${SKIP_SECURITY_SCAN:-0}"
 
 RELEASE_TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 RELEASES_DIR="${DEPLOY_BASE}/releases"
@@ -116,6 +119,19 @@ run_audit() {
 			die "Audit failed. Fix vulnerabilities or set FORCE_DEPLOY=1 to override."
 		fi
 	fi
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Step 4b — Security scan: pnpm scan:deps (trivy image scan + pnpm audit)
+# ──────────────────────────────────────────────────────────────────────────────
+run_security_scan() {
+	if [[ "${SKIP_SECURITY_SCAN}" == "1" ]]; then
+		warn "SKIP_SECURITY_SCAN=1 — skipping dependency and image vulnerability scan"
+		return
+	fi
+	log "Running pnpm scan:deps"
+	cd "${REPO_ROOT}"
+	pnpm scan:deps
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -264,6 +280,7 @@ main() {
 	install_deps
 	run_checks
 	run_audit
+	run_security_scan
 	build_images
 	save_images
 	rsync_release

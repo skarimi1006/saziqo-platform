@@ -169,7 +169,38 @@ install_caddy() {
 }
 
 # ──────────────────────────────────────────────────────────────────────
-# Step 5 — Deploy user
+# Step 5 — Trivy container image scanner
+# Official aquasec apt repo. Idempotent: GPG key + source write both
+# check-then-act so re-runs are no-ops.
+# ──────────────────────────────────────────────────────────────────────
+install_trivy() {
+  if command -v trivy >/dev/null 2>&1; then
+    log "Trivy already installed — skipping repo setup"
+    return
+  fi
+
+  log "Installing Trivy via aquasec apt repo"
+  install -m 0755 -d /etc/apt/keyrings
+
+  if [[ ! -f /etc/apt/keyrings/trivy.gpg ]]; then
+    curl -fsSL https://aquasecurity.github.io/trivy-repo/deb/public.key \
+      | gpg --dearmor -o /etc/apt/keyrings/trivy.gpg
+    chmod a+r /etc/apt/keyrings/trivy.gpg
+  fi
+
+  local arch codename
+  arch="$(dpkg --print-architecture)"
+  codename="$(. /etc/os-release && echo "${VERSION_CODENAME}")"
+  echo "deb [arch=${arch} signed-by=/etc/apt/keyrings/trivy.gpg] \
+https://aquasecurity.github.io/trivy-repo/deb ${codename} main" \
+    > /etc/apt/sources.list.d/trivy.list
+
+  apt-get update -y
+  apt-get install -y trivy
+}
+
+# ──────────────────────────────────────────────────────────────────────
+# Step 6 — Deploy user
 # - useradd is wrapped in `id` check so re-runs don't fail
 # - usermod -aG is idempotent (re-adding to a group is a no-op)
 # - SSH directory perms: 700 on .ssh, 600 on authorized_keys
@@ -197,7 +228,7 @@ create_deploy_user() {
 }
 
 # ──────────────────────────────────────────────────────────────────────
-# Step 6 — Directory tree
+# Step 7 — Directory tree
 # Owned by deploy so the unprivileged user can write release artifacts,
 # logs, and uploads without sudo. Postgres / Redis data dirs are also
 # deploy-owned because the prod compose stack runs as the deploy uid.
@@ -212,7 +243,7 @@ create_app_directories() {
 }
 
 # ──────────────────────────────────────────────────────────────────────
-# Step 7 — UFW initial config
+# Step 8 — UFW initial config
 # - default deny incoming / allow outgoing
 # - allow 22 (SSH), 80 (HTTP), 443 (HTTPS)
 # - `ufw --force enable` skips the y/N prompt
@@ -230,7 +261,7 @@ configure_ufw() {
 }
 
 # ──────────────────────────────────────────────────────────────────────
-# Step 8 — Enable services
+# Step 9 — Enable services
 # `systemctl enable --now` both starts the unit and enables it for
 # subsequent boots. Safe on already-running units.
 # ──────────────────────────────────────────────────────────────────────
@@ -255,6 +286,7 @@ Versions installed:
   - docker:         $(docker --version 2>/dev/null || echo 'not found')
   - docker compose: $(docker compose version --short 2>/dev/null || echo 'not found')
   - caddy:          $(caddy version 2>/dev/null | head -n1 || echo 'not found')
+  - trivy:          $(trivy --version 2>/dev/null | head -n1 || echo 'not found')
   - ufw:            $(ufw status | head -n1)
 
 Layout created at: ${APP_ROOT}
@@ -287,6 +319,7 @@ main() {
   install_base_packages
   install_docker
   install_caddy
+  install_trivy
   create_deploy_user
   create_app_directories
   configure_ufw
