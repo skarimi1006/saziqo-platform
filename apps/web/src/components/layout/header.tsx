@@ -8,7 +8,10 @@ import { UserMenu } from '@/components/user-menu/user-menu';
 
 export function Header() {
   return (
-    <header className="fixed inset-x-0 top-0 z-40 flex h-14 items-center justify-between border-b bg-background/80 px-4 backdrop-blur-sm">
+    <header
+      className="fixed inset-x-0 z-40 flex h-14 items-center justify-between border-b bg-background/80 px-4 backdrop-blur-sm"
+      style={{ top: 'var(--impersonation-banner-height)' }}
+    >
       {/* Start side (visual right in RTL): hamburger + logo */}
       <div className="flex items-center gap-2">
         <MobileMenu />

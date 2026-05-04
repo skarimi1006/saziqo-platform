@@ -9,12 +9,18 @@ import { useAuth } from '@/hooks/use-auth';
 function LoadingSkeleton() {
   return (
     <div className="min-h-screen animate-pulse">
-      {/* Header skeleton */}
-      <div className="fixed inset-x-0 top-0 z-40 h-14 border-b bg-muted" />
-      {/* Sidebar skeleton */}
-      <div className="fixed bottom-0 start-0 top-14 hidden w-64 border-e bg-muted md:block" />
-      {/* Content skeleton */}
-      <div className="pt-14 md:ms-64">
+      <div
+        className="fixed inset-x-0 z-40 h-14 border-b bg-muted"
+        style={{ top: 'var(--impersonation-banner-height)' }}
+      />
+      <div
+        className="fixed bottom-0 start-0 hidden w-64 border-e bg-muted md:block"
+        style={{ top: 'calc(var(--impersonation-banner-height) + 3.5rem)' }}
+      />
+      <div
+        className="md:ms-64"
+        style={{ paddingTop: 'calc(var(--impersonation-banner-height) + 3.5rem)' }}
+      >
         <div className="space-y-3 p-6">
           <div className="h-8 w-48 rounded-lg bg-muted" />
           <div className="h-4 w-full rounded bg-muted" />

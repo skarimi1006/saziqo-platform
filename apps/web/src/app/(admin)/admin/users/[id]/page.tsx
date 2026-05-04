@@ -5,6 +5,7 @@ import { LoaderCircleIcon, Trash2Icon, UserCogIcon } from 'lucide-react';
 import { useParams, useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { toast } from 'sonner';
+import { v4 as uuidv4 } from 'uuid';
 
 import {
   AlertDialog,
@@ -54,7 +55,6 @@ const STATUS_OPTIONS: AdminUserStatus[] = ['ACTIVE', 'SUSPENDED', 'DELETED'];
 interface ImpersonationStartResponse {
   impSessionId: string;
   accessToken: string;
-  refreshToken: string;
   targetUserId: string;
 }
 
@@ -162,6 +162,7 @@ export default function AdminUserDetailPage() {
         'POST',
         '/admin/impersonation/start',
         { targetUserId: userId, reason },
+        { idempotencyKey: uuidv4() },
       );
       return res.data;
     },
