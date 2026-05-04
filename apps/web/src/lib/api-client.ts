@@ -44,6 +44,7 @@ export interface RequestOptions {
   idempotencyKey?: string;
   signal?: AbortSignal;
   skipAuth?: boolean;
+  headers?: Record<string, string>;
 }
 
 interface InternalRequestState {
@@ -152,6 +153,12 @@ export class ApiClient {
 
     if (options?.idempotencyKey) {
       headers.set('Idempotency-Key', options.idempotencyKey);
+    }
+
+    if (options?.headers) {
+      for (const [key, value] of Object.entries(options.headers)) {
+        headers.set(key, value);
+      }
     }
 
     return headers;
