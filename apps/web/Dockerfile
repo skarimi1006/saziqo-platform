@@ -41,7 +41,9 @@ COPY . .
 ARG NEXT_PUBLIC_API_BASE_URL=https://app.saziqo.ir/api/v1
 ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
 
-RUN pnpm --filter web build
+# release:build:web wraps `next build` and then strips CLAUDE.md files
+# from .next/ (Phase 16A). Comment-marker stripping lands in 16B.
+RUN pnpm release:build:web
 
 # ──────────────────────────────────────────────────────────────────────
 # runner — standalone Next.js server (~150MB image)

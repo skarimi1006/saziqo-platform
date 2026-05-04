@@ -15,7 +15,10 @@
     "test": "turbo run test",
     "clean": "turbo run clean && rm -rf node_modules",
     "format": "prettier --write .",
-    "prepare": "husky"
+    "prepare": "husky",
+    "release:build": "bash infra/scripts/release-build.sh",
+    "release:build:api": "pnpm --filter api build && find apps/api/dist -name 'CLAUDE.md' -type f -delete",
+    "release:build:web": "pnpm --filter web build && find apps/web/.next -name 'CLAUDE.md' -type f -delete"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

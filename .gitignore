@@ -79,3 +79,6 @@ playwright/.cache/
 .cache/
 tmp/
 temp/
+
+# Release artifacts (Phase 16A)
+release-strip-log.txt

@@ -34,13 +34,11 @@ WORKDIR /app
 COPY --from=deps /app /app
 COPY . .
 
-# Generate Prisma client into apps/api/node_modules/.prisma, then build.
+# Generate Prisma client into apps/api/node_modules/.prisma, then build
+# via the release-build script which strips CLAUDE.md files from dist/
+# (Phase 16A). Comment-marker stripping (CLAUDE: / REVIEW:) lands in 16B.
 RUN pnpm --filter api db:generate \
- && pnpm --filter api build
-
-# TODO(phase-16A): Replace with `pnpm release:build:api` once the
-# release-strip script exists. That step strips CLAUDE/REVIEW comment
-# markers from the compiled JS. For now we ship the dist/ as built.
+ && pnpm release:build:api
 
 # ──────────────────────────────────────────────────────────────────────
 # runner — minimal runtime
