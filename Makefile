@@ -7,7 +7,7 @@ DEPLOY_USER ?= deploy
 
 .PHONY: dev-up dev-down dev-logs dev-reset db-shell redis-shell \
         prod-build prod-logs prod-shell-api prod-db-shell harden \
-        restore-drill help
+        restore-drill deploy help
 
 dev-up: ## Start all dev services in the background
 	$(COMPOSE_DEV) up -d
@@ -66,6 +66,9 @@ harden: ## Run infra/scripts/harden.sh on $(DEPLOY_USER)@$(DEPLOY_HOST)
 restore-drill: ## Run infra/scripts/restore-drill.sh on $(DEPLOY_USER)@$(DEPLOY_HOST)
 	ssh -t $(DEPLOY_USER)@$(DEPLOY_HOST) \
 		'/opt/saziqo-platform/current/infra/scripts/restore-drill.sh'
+
+deploy: ## Ship a release: build, rsync, migrate, health-check, auto-rollback
+	DEPLOY_HOST=$(DEPLOY_HOST) DEPLOY_USER=$(DEPLOY_USER) bash infra/scripts/deploy.sh
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'

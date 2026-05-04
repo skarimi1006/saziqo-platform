@@ -209,9 +209,119 @@ Caddy, postgres, redis, meilisearch should not need restarts during a normal app
 
 ---
 
-## (Sections to follow in Phases 15D–15G)
+## Deploying releases — `deploy.sh`
 
-- **15D** server hardening (UFW final rules, fail2ban jails, unattended-upgrades)
-- **15E** backup script (pg_dump + file snapshot)
-- **15F** restore drill
-- **15G** manual deploy script (no CI/CD)
+Phase 15G. Run from your **local workstation** — not on the VPS. The script builds Docker images locally, ships them to the VPS, swaps the `current` symlink atomically, and rolls back automatically if the health check fails.
+
+### Pre-deploy checklist
+
+Before running `deploy.sh`, confirm:
+
+- [ ] You are on the `main` branch with a clean working tree (`git status` shows nothing)
+- [ ] `pnpm install --frozen-lockfile` succeeds (no lock-file drift)
+- [ ] `/opt/saziqo-platform/current/.env.production` is in place on the VPS with no remaining `CHANGE_ME` placeholders
+- [ ] `rclone config` has been run on the VPS as the deploy user (needed by the backup cron, not deploy itself, but good to confirm once)
+- [ ] SSH key auth works: `ssh deploy@app.saziqo.ir whoami` returns `deploy` without a password prompt
+- [ ] Docker daemon is running locally and `docker images` succeeds
+- [ ] `rsync` is available locally (`rsync --version`)
+
+### How to deploy
+
+```bash
+# From the repo root, default target is app.saziqo.ir
+./infra/scripts/deploy.sh
+
+# Or via Make
+make deploy
+
+# Override target host
+DEPLOY_HOST=staging.saziqo.ir ./infra/scripts/deploy.sh
+
+# Bypass a failing audit (use with caution)
+FORCE_DEPLOY=1 ./infra/scripts/deploy.sh
+```
+
+The script runs through these steps automatically:
+
+| Step | What happens                                                            |
+| ---- | ----------------------------------------------------------------------- | --------------------------------------- |
+| 1    | Verify `main` branch, clean tree                                        |
+| 2    | `pnpm install --frozen-lockfile`                                        |
+| 3    | `pnpm typecheck && pnpm lint && pnpm test`                              |
+| 4    | `pnpm audit --audit-level=high`                                         |
+| 5    | `docker compose build api web` (local)                                  |
+| 6    | `docker save …                                                          | gzip`→`/tmp/saziqo-release-<ts>.tar.gz` |
+| 7    | `rsync` repo + tarball to `releases/<ts>/` on VPS                       |
+| 8    | Remote: `docker load`, Prisma migrations, symlink swap, `compose up -d` |
+| 9    | Health loop (30 × 2 s). On failure: auto-rollback to previous release   |
+| 10   | Prune releases — keeps the 5 most recent                                |
+
+On success, the script prints the release timestamp and exits 0. On health-check failure, it rolls back, prints the error, and exits 1.
+
+### Release layout on the VPS
+
+```
+/opt/saziqo-platform/
+  current/              → releases/20260504-142301/   (symlink)
+  releases/
+    20260504-142301/    ← active (most recent)
+    20260503-091512/
+    20260502-180045/
+    20260501-070022/
+    20260430-150010/    ← oldest kept (5th)
+```
+
+Releases older than the 5th are deleted by the prune step.
+
+### Manual rollback
+
+Use this when the auto-rollback didn't trigger (e.g. you decided to roll back _after_ the health check passed, because you found a regression later):
+
+```bash
+ssh deploy@app.saziqo.ir
+
+# 1. See available releases (most recent first)
+ls -lt /opt/saziqo-platform/releases/
+
+# 2. Pick the target and swap the symlink
+PREV=/opt/saziqo-platform/releases/<previous-timestamp>
+ln -sfn "${PREV}" /opt/saziqo-platform/current
+
+# 3. Force-recreate the containers from the rolled-back release
+cd "${PREV}"
+docker compose -f infra/docker/docker-compose.prod.yml \
+  --env-file .env.production up -d --force-recreate
+
+# 4. Verify
+curl -sS http://localhost:3001/api/v1/health
+```
+
+### Viewing logs after a deploy
+
+```bash
+# Live tail of all containers + Caddy access log
+make prod-logs
+
+# api only
+docker compose -f /opt/saziqo-platform/current/infra/docker/docker-compose.prod.yml \
+  --env-file /opt/saziqo-platform/current/.env.production logs -f api
+
+# Caddy system journal
+journalctl -u caddy -f
+
+# Backup log
+tail -F /var/log/saziqo-backup.log
+```
+
+### Troubleshooting deploy failures
+
+| Symptom                                  | Fix                                                                                      |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `Not on main branch`                     | `git checkout main`                                                                      |
+| `Unstaged changes`                       | `git stash` or commit before deploying                                                   |
+| `pnpm audit` blocks                      | Fix the vulnerability or `FORCE_DEPLOY=1` (document why in Slack)                        |
+| `docker save saziqo-api` — no such image | Images weren't tagged; check `infra/docker/docker-compose.prod.yml` service names        |
+| `rsync` permission denied                | SSH key not in deploy's `authorized_keys`; re-run `provision.sh` or add key manually     |
+| `.env.production not found` on remote    | Stage the env file at `/opt/saziqo-platform/current/.env.production` before first deploy |
+| Health check fails, rollback triggered   | `make prod-logs` to diagnose; check api container logs for startup errors                |
+| Rollback target not found                | First deploy ever had no previous release; restore manually from backup or re-deploy     |
