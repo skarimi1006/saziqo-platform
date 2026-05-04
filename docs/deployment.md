@@ -89,9 +89,128 @@ Decide before hitting the API in production. The Caddyfile in this repo follows 
 
 ---
 
-## (Other sections to follow in Phases 15C–15G)
+## Production stack — first deploy walkthrough
 
-- **15C** docker-compose.prod.yml + `.env.production` template
+Phase 15C. Assumes you've completed Phase 15A (`provision.sh`) and 15B (Caddyfile in place, TLS reachable).
+
+### 1. Get the repo onto the VPS
+
+The `releases/` directory under `/opt/saziqo-platform/` is owned by `deploy`. Each release is a checkout pinned by a git SHA; `current/` is a symlink to the active one (the symlink convention lands fully in 15G).
+
+For the very first manual deploy:
+
+```bash
+ssh deploy@app.saziqo.ir
+cd /opt/saziqo-platform/releases
+git clone https://github.com/<your-org>/saziqo-platform.git "$(date -u +%Y%m%dT%H%M%S)"
+ln -snf "$(date -u +%Y%m%dT%H%M%S)" /opt/saziqo-platform/current
+```
+
+(15G's `deploy.sh` will replace this with `rsync` + atomic symlink swap.)
+
+### 2. Stage the production env file
+
+```bash
+cd /opt/saziqo-platform/current
+cp infra/.env.production.template /opt/saziqo-platform/current/.env.production
+chmod 600 /opt/saziqo-platform/current/.env.production
+```
+
+Open the file and replace **every** `CHANGE_ME` placeholder. For each secret:
+
+```bash
+openssl rand -hex 32        # use for JWT_SECRET, JWT_REFRESH_SECRET, OTP_SALT, MEILI_MASTER_KEY
+openssl rand -base64 24     # use for POSTGRES_PASSWORD, REDIS_PASSWORD
+```
+
+`REDIS_URL` and `DATABASE_URL` must contain the same passwords you set in `REDIS_PASSWORD` / `POSTGRES_PASSWORD` — keep them in sync.
+
+`SUPER_ADMIN_PHONE` must match `^\+989\d{9}$` (Iranian E.164). Boot will refuse to start otherwise.
+
+### 3. Build and start the stack
+
+```bash
+cd /opt/saziqo-platform/current
+docker compose -f infra/docker/docker-compose.prod.yml --env-file .env.production build
+docker compose -f infra/docker/docker-compose.prod.yml --env-file .env.production up -d
+```
+
+Or once you've sourced `.env.production` into your shell:
+
+```bash
+make prod-build
+```
+
+The stack:
+
+- **api** → bound to `127.0.0.1:3001`, healthchecked via `/api/v1/health`
+- **web** → bound to `127.0.0.1:3000`, healthchecked via `/`
+- **postgres** → no host port; reachable on the `internal` bridge as `postgres:5432`
+- **redis** → no host port; reachable as `redis:6379`, `--requirepass` enforced
+- **meilisearch** → no host port; reachable as `meilisearch:7700`
+
+Caddy (running on the host, configured in 15B) reverse-proxies the public 80/443 to the localhost-bound api/web. Postgres/Redis/Meili are reachable only from inside the docker network — that's the security boundary.
+
+### 4. Run migrations
+
+The first boot of the api container does NOT auto-migrate (the entrypoint is `node dist/main.js`). Run migrations explicitly:
+
+```bash
+docker compose -f infra/docker/docker-compose.prod.yml --env-file .env.production \
+  exec api npx prisma migrate deploy
+```
+
+After this, `BootstrapService` seeds the super-admin role and user on the next API restart (or it already ran during the initial boot if the schema was fresh enough).
+
+### 5. Verify
+
+```bash
+make prod-logs                  # tails caddy + api + web logs
+
+# from anywhere on the public internet:
+curl -sS https://app.saziqo.ir/api/v1/health      # → {"data":{"status":"ok"}}
+curl -sSI https://app.saziqo.ir/ | head -n 1      # → HTTP/2 200
+
+# inside the api container:
+make prod-shell-api
+node -e "console.log(process.versions.node)"
+
+# inside the postgres container:
+make prod-db-shell
+\dt                              # tables present
+\du                              # roles present
+```
+
+### 6. Updates
+
+For subsequent releases, until 15G's `deploy.sh` lands:
+
+```bash
+cd /opt/saziqo-platform/current
+git pull
+docker compose -f infra/docker/docker-compose.prod.yml --env-file .env.production build api web
+docker compose -f infra/docker/docker-compose.prod.yml --env-file .env.production up -d api web
+docker compose -f infra/docker/docker-compose.prod.yml --env-file .env.production \
+  exec api npx prisma migrate deploy
+```
+
+Caddy, postgres, redis, meilisearch should not need restarts during a normal app update.
+
+### Troubleshooting
+
+| Symptom                                       | Cause / Fix                                                                                               |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| api healthcheck failing                       | `docker compose logs api` — most often the env file has a missing required var or wrong DATABASE_URL.     |
+| `MEILI_URL` missing error at boot             | The `meilisearch` service didn't come up; check `docker compose ps` and its logs.                         |
+| `POSTGRES_PASSWORD` mismatch error            | The DB volume already has data from a different password. Either restore the password or wipe the volume. |
+| `502 Bad Gateway` from Caddy                  | api or web container is down; Caddy is up but the upstream is unreachable.                                |
+| Web bundle still hits old API URL after build | `NEXT_PUBLIC_API_BASE_URL` is inlined at build time; rebuild the `web` image after changing it.           |
+| Prisma `P3018` migration applied error        | A previous migration partially applied. Resolve with `prisma migrate resolve --applied <name>`.           |
+
+---
+
+## (Sections to follow in Phases 15D–15G)
+
 - **15D** server hardening (UFW final rules, fail2ban jails, unattended-upgrades)
 - **15E** backup script (pg_dump + file snapshot)
 - **15F** restore drill

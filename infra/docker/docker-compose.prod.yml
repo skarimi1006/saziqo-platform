@@ -1,0 +1,168 @@
+# Production docker-compose for the saziqo platform.
+#
+# Topology — Caddy on the host fronts everything; only api and web bind
+# to 127.0.0.1 so nothing is reachable from the public internet directly.
+# Postgres, Redis, and Meilisearch are reachable only on the internal
+# Docker bridge network (no `ports:` mapping at all).
+#
+# Volumes are bind-mounted to /opt/saziqo-platform/shared/* so backups
+# and DR are filesystem-level, not docker-volume-level.
+#
+# Run from /opt/saziqo-platform/current/ on the VPS:
+#   docker compose -f infra/docker/docker-compose.prod.yml --env-file .env.production up -d
+
+name: saziqo-platform
+
+# ──────────────────────────────────────────────────────────────────────
+# Reusable bits — common healthcheck/restart settings stay DRY here
+# ──────────────────────────────────────────────────────────────────────
+x-restart-policy: &restart_policy
+  restart: unless-stopped
+
+x-logging: &default_logging
+  driver: json-file
+  options:
+    max-size: '20m'
+    max-file: '5'
+
+services:
+  # ────────────────────────────────────────────────────────────────────
+  # NestJS API
+  # ────────────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    image: saziqo/api:latest
+    <<: *restart_policy
+    logging: *default_logging
+    env_file:
+      - /opt/saziqo-platform/current/.env.production
+    environment:
+      # Override the dev defaults baked into .env.production: containers
+      # talk to the in-network services by hostname, not localhost.
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      MEILI_URL: ${MEILI_URL}
+    ports:
+      # Bind only to localhost so Caddy on the host can reach it but
+      # the public internet cannot.
+      - '127.0.0.1:3001:3001'
+    volumes:
+      - /opt/saziqo-platform/shared/uploads:/var/saziqo-platform/files
+      - /opt/saziqo-platform/shared/logs:/var/log/saziqo-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:3001/api/v1/health']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - internal
+
+  # ────────────────────────────────────────────────────────────────────
+  # Next.js web (standalone server)
+  # ────────────────────────────────────────────────────────────────────
+  web:
+    build:
+      context: ../..
+      dockerfile: apps/web/Dockerfile
+      args:
+        # NEXT_PUBLIC_* must be present at *build* time because Next.js
+        # inlines them into the client bundle. Re-baking the image is
+        # required to change them.
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL}
+    image: saziqo/web:latest
+    <<: *restart_policy
+    logging: *default_logging
+    env_file:
+      - /opt/saziqo-platform/current/.env.production
+    ports:
+      - '127.0.0.1:3000:3000'
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://localhost:3000/']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - internal
+
+  # ────────────────────────────────────────────────────────────────────
+  # PostgreSQL — internal only
+  # ────────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    <<: *restart_policy
+    logging: *default_logging
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - /opt/saziqo-platform/shared/postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - internal
+
+  # ────────────────────────────────────────────────────────────────────
+  # Redis — internal only, requirepass mandatory in prod
+  # ────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    <<: *restart_policy
+    logging: *default_logging
+    command: ['redis-server', '--appendonly', 'yes', '--requirepass', '${REDIS_PASSWORD}']
+    volumes:
+      - /opt/saziqo-platform/shared/redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', '-a', '${REDIS_PASSWORD}', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+      - internal
+
+  # ────────────────────────────────────────────────────────────────────
+  # Meilisearch — internal only
+  # The API's config schema requires MEILI_URL + MEILI_MASTER_KEY, so
+  # Meilisearch must be in the stack even though it is not in the plan's
+  # original 4-service list. Index data at shared/meili-data.
+  # ────────────────────────────────────────────────────────────────────
+  meilisearch:
+    image: getmeili/meilisearch:v1.10
+    <<: *restart_policy
+    logging: *default_logging
+    environment:
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+      MEILI_ENV: production
+    volumes:
+      - /opt/saziqo-platform/shared/meili-data:/meili_data
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:7700/health || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge
