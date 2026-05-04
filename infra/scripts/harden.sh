@@ -39,6 +39,8 @@ SSHD_BACKUP="${SSHD_CONFIG}.bak"
 F2B_JAIL="/etc/fail2ban/jail.d/sshd.local"
 LOGROTATE_API="/etc/logrotate.d/saziqo-api"
 LOGROTATE_CADDY="/etc/logrotate.d/saziqo-caddy"
+BACKUP_CRON="/etc/cron.d/saziqo-backup"
+BACKUP_SCRIPT="/opt/saziqo-platform/current/infra/scripts/backup.sh"
 
 # SSH directives we enforce. Order matters — kept identical to the plan.
 declare -A SSH_DIRECTIVES=(
@@ -302,6 +304,25 @@ EOF
 }
 
 # ──────────────────────────────────────────────────────────────────────
+# Step 9 — install daily backup cron entry (Phase 15E)
+# Runs as deploy at 02:00 server time. Cron drops jobs from /etc/cron.d
+# silently if file perms are too loose, so we set them tight.
+# ──────────────────────────────────────────────────────────────────────
+install_backup_cron() {
+	log "Installing ${BACKUP_CRON}"
+	cat > "${BACKUP_CRON}" <<EOF
+# Managed by infra/scripts/harden.sh — Phase 15E
+# Daily backup: pg_dump + uploads tarball + rclone push to S3.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+0 2 * * * ${DEPLOY_USER} ${BACKUP_SCRIPT}
+EOF
+	# /etc/cron.d files MUST be 0644 root:root or cron ignores them.
+	chmod 0644 "${BACKUP_CRON}"
+	chown root:root "${BACKUP_CRON}"
+}
+
+# ──────────────────────────────────────────────────────────────────────
 # Final summary
 # ──────────────────────────────────────────────────────────────────────
 print_summary() {
@@ -320,6 +341,7 @@ What changed:
   - unattended-upgrades: security-only, auto-reboot at 02:30 if needed
   - logrotate: /var/log/saziqo-api/*.log + /var/log/caddy/*.log,
                daily × 14, compressed
+  - cron: ${BACKUP_CRON} (daily 02:00 UTC, runs as ${DEPLOY_USER})
   - hardening log: ${LOG_FILE}
 
 DO THIS NOW (before closing your existing session):
@@ -357,6 +379,7 @@ main() {
 	configure_fail2ban
 	configure_unattended_upgrades
 	configure_logrotate
+	install_backup_cron
 	print_summary
 	log "Hardening finished successfully"
 }

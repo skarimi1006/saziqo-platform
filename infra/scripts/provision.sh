@@ -101,6 +101,7 @@ install_base_packages() {
     make \
     jq \
     htop \
+    rclone \
     ca-certificates \
     gnupg \
     lsb-release
