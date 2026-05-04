@@ -11,6 +11,7 @@
     "clean": "rm -rf dist .tsbuildinfo",
     "test": "dotenv -e ../../.env -- jest --runInBand",
     "test:watch": "dotenv -e ../../.env -- jest --watch --runInBand",
+    "coverage": "dotenv -e ../../.env -- jest --coverage --runInBand",
     "db:generate": "dotenv -e ../../.env -- prisma generate",
     "db:migrate-dev": "dotenv -e ../../.env -- prisma migrate dev",
     "db:migrate-deploy": "dotenv -e ../../.env -- prisma migrate deploy",

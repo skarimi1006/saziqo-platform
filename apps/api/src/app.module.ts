@@ -8,6 +8,7 @@ import { ResponseInterceptor } from './common/interceptors/response.interceptor'
 import { PinoLoggerModule } from './common/middleware/logger.middleware';
 import { RateLimitGuard } from './common/middleware/rate-limit.middleware';
 import { ConfigModule } from './config/config.module';
+import { TestModule } from './core/_test/test.module';
 import { AuditModule } from './core/audit/audit.module';
 import { AuthModule } from './core/auth/auth.module';
 import { FilesModule } from './core/files/files.module';
@@ -82,6 +83,7 @@ const ENABLED_MODULE_IMPORTS: Type<unknown>[] = MODULES.filter((m) => m.enabled)
     PayoutsModule,
     PaymentsModule,
     ModuleRegistryModule,
+    TestModule,
     ...ENABLED_MODULE_IMPORTS,
   ],
   providers: [

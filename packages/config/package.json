@@ -8,7 +8,9 @@
     "./prettier": "./prettier.config.js",
     "./tsconfig.base.json": "./tsconfig.base.json",
     "./tsconfig.node.json": "./tsconfig.node.json",
-    "./tsconfig.next.json": "./tsconfig.next.json"
+    "./tsconfig.next.json": "./tsconfig.next.json",
+    "./jest-node": "./jest-node.cjs",
+    "./jest-react": "./jest-react.cjs"
   },
   "dependencies": {
     "eslint-plugin-import-x": "^4.13.3",

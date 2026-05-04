@@ -63,6 +63,12 @@ export class OtpService {
     // and the fallback if Redis evicts the key under memory pressure.
     await client.set(otpKey(phone), codeHash, 'EX', OTP_TTL_SECONDS);
 
+    // SECURITY: Store plain code only in NODE_ENV=test so Playwright e2e tests
+    // can retrieve it via GET /api/v1/_test/last-otp/:phone. Never runs in prod.
+    if (this.config.nodeEnv === 'test') {
+      await client.set(`otp:test:${phone}`, code, 'EX', OTP_TTL_SECONDS);
+    }
+
     return { code, expiresInSeconds: OTP_TTL_SECONDS };
   }
 
