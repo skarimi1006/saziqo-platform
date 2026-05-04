@@ -7,7 +7,11 @@ export interface JwtPayload {
   sub?: string;
   iat?: number;
   exp?: number;
-  imp?: string;
+  // The API encodes impersonation context as an object (see
+  // SessionsService.signImpersonationAccessToken on the API side):
+  //   imp: { actorUserId: string, impSessionId: string }
+  // Tests sometimes use a bare string. Consumers should narrow.
+  imp?: unknown;
   [claim: string]: unknown;
 }
 

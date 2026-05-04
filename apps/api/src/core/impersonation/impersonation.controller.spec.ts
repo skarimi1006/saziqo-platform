@@ -73,9 +73,6 @@ describe('ImpersonationController (integration)', () => {
         impSessionId: IMP_SESSION_ID,
         tokens: {
           accessToken: 'imp.access',
-          refreshToken: 'imp.refresh',
-          sessionId: 99n,
-          refreshCookie: { name: 'refresh_token', value: 'x', options: {} },
         },
       });
       const app = await buildApp({ start });
@@ -88,9 +85,9 @@ describe('ImpersonationController (integration)', () => {
       expect(res.body.data).toMatchObject({
         impSessionId: '42',
         accessToken: 'imp.access',
-        refreshToken: 'imp.refresh',
         targetUserId: '5',
       });
+      expect(res.body.data.refreshToken).toBeUndefined();
       expect(start).toHaveBeenCalledWith(
         ADMIN_USER_ID,
         TARGET_USER_ID,

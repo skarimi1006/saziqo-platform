@@ -5,11 +5,11 @@ import { ErrorCode } from '../../common/types/response.types';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NOTIFICATION_TYPES } from '../notifications/types.catalog';
 import { PrismaService } from '../prisma/prisma.service';
-import { IssuedTokens, SessionsService } from '../sessions/sessions.service';
+import { IssuedImpersonationTokens, SessionsService } from '../sessions/sessions.service';
 
 export interface StartImpersonationResult {
   impSessionId: bigint;
-  tokens: IssuedTokens;
+  tokens: IssuedImpersonationTokens;
 }
 
 // CLAUDE: IMPERSONATION_STARTED and IMPERSONATION_ENDED audit rows are

@@ -23,6 +23,7 @@ import { JwtAuthGuard, AuthenticatedUser } from '../../common/guards/jwt-auth.gu
 import { PermissionGuard } from '../../common/guards/permission.guard';
 import { ErrorCode } from '../../common/types/response.types';
 import { AUDIT_ACTIONS } from '../audit/actions.catalog';
+import { maskPhone } from '../audit/redaction';
 
 import { UpdateUserSchema, UpdateUserDto } from './dto/update-user.dto';
 import { UsersService } from './users.service';
@@ -74,6 +75,24 @@ export class UsersController {
         },
         hasMore: result.hasMore,
       },
+    };
+  }
+
+  @Get(':id/light')
+  @RequirePermission('admin:read:users')
+  async getUserLight(@Param('id') id: string) {
+    const user = await this.usersService.findByIdForAdmin(this.parseId(id));
+    if (!user) {
+      throw new HttpException(
+        { code: ErrorCode.NOT_FOUND, message: 'User not found' },
+        HttpStatus.NOT_FOUND,
+      );
+    }
+    return {
+      id: user.id,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      phoneMasked: maskPhone(user.phone),
     };
   }
 

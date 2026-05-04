@@ -78,9 +78,6 @@ describe('ImpersonationService', () => {
       });
       sessions.issueImpersonationTokens.mockResolvedValue({
         accessToken: 'imp.access',
-        refreshToken: 'imp.refresh',
-        sessionId: 99n,
-        refreshCookie: { name: 'refresh_token', value: 'x', options: {} },
       });
 
       const result = await service.start(

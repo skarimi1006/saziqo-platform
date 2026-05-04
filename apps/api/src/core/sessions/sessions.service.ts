@@ -33,6 +33,10 @@ export interface IssuedTokens {
   sessionId: bigint;
 }
 
+export interface IssuedImpersonationTokens {
+  accessToken: string;
+}
+
 const REFRESH_COOKIE_NAME = 'refresh_token';
 const REFRESH_COOKIE_PATH = '/api/v1/auth/refresh';
 
@@ -81,39 +85,31 @@ export class SessionsService {
   // `imp` claim binding them to (a) the actual admin who started this and
   // (b) the ImpersonationSession row. JwtAuthGuard re-validates the row on
   // every request, so stopping the impersonation invalidates every token
-  // issued for it before its 30-day refresh expiry.
+  // issued for it.
+  //
+  // No refresh token is issued for impersonation: the access token is
+  // short-lived (JWT_EXPIRES_IN, default 15m) and the admin's original
+  // refresh cookie is left untouched. When impersonation ends — either by
+  // explicit /admin/impersonation/stop or by access-token expiry — the
+  // frontend bootstraps from the admin's preserved refresh cookie and the
+  // admin is back in their own session.
+  // userAgent / ipAddress are accepted for symmetry with issueTokens and
+  // future telemetry; they are intentionally unused today since no session
+  // row is written for impersonation.
+   
   async issueImpersonationTokens(
     actorUserId: bigint,
     targetUserId: bigint,
     impSessionId: bigint,
-    userAgent: string | null,
-    ipAddress: string | null,
-  ): Promise<IssuedTokens> {
-    const { raw, hash } = this.generateRefreshToken();
-    const refreshTtlMs = this.refreshTtlMs();
-
-    const session = await this.prisma.session.create({
-      data: {
-        userId: targetUserId,
-        refreshTokenHash: hash,
-        userAgent,
-        ipAddress,
-        expiresAt: new Date(Date.now() + refreshTtlMs),
-      },
-    });
-
+    _userAgent: string | null,
+    _ipAddress: string | null,
+  ): Promise<IssuedImpersonationTokens> {
     const accessToken = await this.signImpersonationAccessToken(
       targetUserId,
       actorUserId,
       impSessionId,
     );
-
-    return {
-      accessToken,
-      refreshToken: raw,
-      sessionId: session.id,
-      refreshCookie: this.buildCookie(raw, refreshTtlMs),
-    };
+    return { accessToken };
   }
 
   // Atomic rotation. The four-state branch lives inside one transaction:

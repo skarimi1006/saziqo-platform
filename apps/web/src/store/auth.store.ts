@@ -33,6 +33,13 @@ interface RefreshResponse {
   accessToken: string;
 }
 
+export interface ImpersonationActor {
+  id: string;
+  firstName: string | null;
+  lastName: string | null;
+  phoneMasked: string;
+}
+
 export interface AuthState {
   accessToken: string | null;
   user: User | null;
@@ -41,6 +48,7 @@ export interface AuthState {
   profileComplete: boolean;
   isImpersonating: boolean;
   impersonationActorId: string | null;
+  impersonationActor: ImpersonationActor | null;
 
   bootstrap: () => Promise<void>;
   setAuth: (accessToken: string, user: User) => void;
@@ -62,18 +70,40 @@ const initialState = {
   profileComplete: false,
   isImpersonating: false,
   impersonationActorId: null as string | null,
+  impersonationActor: null as ImpersonationActor | null,
 };
 
+// CLAUDE: The API encodes the impersonation claim as
+//   imp: { actorUserId: string, impSessionId: string }
+// (see SessionsService.signImpersonationAccessToken). Older tests pass a
+// bare string for `imp`; we accept both for now so the test fixtures don't
+// need to know about the JWT shape.
 function impersonationFromToken(token: string): {
   isImpersonating: boolean;
   impersonationActorId: string | null;
 } {
-  const payload = decodeJwtPayload<{ imp?: string }>(token);
+  const payload = decodeJwtPayload(token);
   const imp = payload?.imp;
   if (typeof imp === 'string' && imp.length > 0) {
     return { isImpersonating: true, impersonationActorId: imp };
   }
+  if (imp && typeof imp === 'object') {
+    const actorUserId = (imp as { actorUserId?: unknown }).actorUserId;
+    if (typeof actorUserId === 'string' && actorUserId.length > 0) {
+      return { isImpersonating: true, impersonationActorId: actorUserId };
+    }
+  }
   return { isImpersonating: false, impersonationActorId: null };
+}
+
+async function fetchImpersonationActor(actorId: string): Promise<ImpersonationActor | null> {
+  try {
+    const res = await apiClient.get<ImpersonationActor>(`/admin/users/${actorId}/light`);
+    return res.data;
+  } catch {
+    // Non-fatal: banner will fall back to "by admin #{id}" if the lookup fails.
+    return null;
+  }
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
@@ -100,7 +130,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         profileComplete: user.status === 'ACTIVE',
         isImpersonating,
         impersonationActorId,
+        impersonationActor: null,
       });
+      if (isImpersonating && impersonationActorId) {
+        const actor = await fetchImpersonationActor(impersonationActorId);
+        set({ impersonationActor: actor });
+      }
     } catch (err) {
       // Any failure (no cookie, expired refresh, /users/me 5xx) leaves
       // the user logged-out. Surfacing the original error would force
@@ -130,7 +165,23 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       profileComplete: user.status === 'ACTIVE',
       isImpersonating,
       impersonationActorId,
+      impersonationActor: null,
     });
+    if (isImpersonating && impersonationActorId) {
+      void fetchImpersonationActor(impersonationActorId)
+        .then((actor) => {
+          // Only apply if we're still impersonating the same actor — guards against
+          // a stop+start race where the actor changes mid-fetch.
+          if (useAuthStore.getState().impersonationActorId === impersonationActorId) {
+            set({ impersonationActor: actor });
+          }
+        })
+        .catch(() => {
+          // fetchImpersonationActor already swallows failures and returns null;
+          // .catch here is purely belt-and-suspenders so the unmounted-test
+          // promise can never surface as an unhandled rejection.
+        });
+    }
   },
 
   clearAuth() {

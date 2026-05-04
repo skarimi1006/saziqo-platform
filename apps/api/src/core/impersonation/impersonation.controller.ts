@@ -90,7 +90,6 @@ export class ImpersonationController {
     return {
       impSessionId,
       accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
       targetUserId: body.targetUserId,
     };
   }
