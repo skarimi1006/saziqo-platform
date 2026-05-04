@@ -254,8 +254,295 @@ docker compose -f /opt/saziqo-platform/current/infra/docker/docker-compose.prod.
 
 ---
 
-## (Sections to follow in later phases)
+## Daily operations
 
-- **15G** manual deploy script
-- Monitoring / alerting (Phase Group 23)
-- On-call runbook (Phase 24F)
+A short loop to run once per working day. Five minutes total when nothing is wrong.
+
+### 1. Health check
+
+```bash
+curl -sS https://app.saziqo.ir/api/v1/health
+# → {"data":{"status":"ok","uptime":..., "checks":{"db":"ok","redis":"ok"}}}
+```
+
+A non-`ok` `db` or `redis` field is a P1. Any other status → check container logs immediately:
+
+```bash
+ssh deploy@app.saziqo.ir 'docker compose -f /opt/saziqo-platform/current/infra/docker/docker-compose.prod.yml --env-file /opt/saziqo-platform/current/.env.production ps'
+```
+
+### 2. Verify yesterday's backup ran
+
+```bash
+ssh deploy@app.saziqo.ir
+ls -lt /opt/saziqo-platform/backups/postgres/ | head -5
+ls -lt /opt/saziqo-platform/backups/files/ | head -5
+tail -50 /var/log/saziqo-backup.log
+```
+
+The newest file in each directory should be dated yesterday (cron runs at 02:00 server time). The log's last lines should end with `Backup run complete`. Missing / partial / errored → see `docs/operations.md` § Backups → Troubleshooting.
+
+Confirm remote upload landed too:
+
+```bash
+rclone ls "${RCLONE_REMOTE_NAME:-arvan}:${S3_BUCKET:-saziqo-backups}/postgres/" | tail -5
+```
+
+### 3. Skim the API error log
+
+```bash
+ssh deploy@app.saziqo.ir 'tail -n 500 /var/log/saziqo-api/api.log | jq -c "select(.level >= 50)"'
+```
+
+Pino emits structured JSON; `level >= 50` is `error` and above. Recurring 5xx clusters → file an issue.
+
+### 4. Skim Caddy access log for anomalies
+
+```bash
+ssh deploy@app.saziqo.ir 'tail -n 1000 /var/log/caddy/access.log | jq -r "select(.status >= 500) | [.ts, .request.method, .request.uri, .status] | @tsv" | head -50'
+```
+
+A baseline of zero is normal. Bursts of 500s point at a regression that auto-rollback didn't catch (subtle bug, not a process crash).
+
+### 5. fail2ban activity
+
+```bash
+ssh deploy@app.saziqo.ir 'sudo fail2ban-client status sshd'
+```
+
+Banned-IP count creeping up = active scanning. Not actionable on its own; flag if combined with a successful auth from an unfamiliar IP (`journalctl -u ssh`).
+
+---
+
+## Common admin tasks
+
+These are the operational tasks an on-call admin runs through the API + admin shell, not the CLI. All admin endpoints require:
+
+- The relevant `admin:*` permission on the caller (granted via the `admin` or `super_admin` role)
+- The `X-Admin-Confirm: true` header on destructive endpoints (S6 — handled by the admin shell automatically; required when calling raw via `curl`)
+
+The admin shell at `https://app.saziqo.ir/admin` is the supported entry point. The `curl` examples below are for emergencies when the shell is broken.
+
+### Add a new admin
+
+The first super_admin is bootstrapped at API startup from `SUPER_ADMIN_PHONE` in `.env.production`. To grant `admin` to an additional existing user:
+
+1. Sign in to the admin shell as super_admin.
+2. Navigate to **کاربران** → search by phone → user detail page.
+3. Click **افزودن نقش** → select `admin` → confirm.
+
+Or via API (replace `<userId>` and use a super_admin's bearer token):
+
+```bash
+TOKEN=<bearer-jwt-from-admin-login>
+USER_ID=<bigint>
+
+curl -sS -X POST https://app.saziqo.ir/api/v1/admin/users/${USER_ID}/roles \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "X-Admin-Confirm: true" \
+  -H "Content-Type: application/json" \
+  -d '{"roleName":"admin"}'
+```
+
+The action is recorded in `audit_log` with action `USER_ROLE_ASSIGNED`.
+
+### Suspend a user
+
+Status transitions: `ACTIVE` → `SUSPENDED` blocks all further authenticated requests but does not revoke existing sessions. To force the user out immediately, follow with a session revoke.
+
+```bash
+TOKEN=<bearer-jwt>
+USER_ID=<bigint>
+
+# 1. Mark suspended
+curl -sS -X PATCH https://app.saziqo.ir/api/v1/admin/users/${USER_ID} \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "X-Admin-Confirm: true" \
+  -H "Content-Type: application/json" \
+  -d '{"status":"SUSPENDED"}'
+
+# 2. Revoke all their active sessions (admin endpoint reuses the user's revoke route)
+curl -sS -X POST https://app.saziqo.ir/api/v1/admin/users/${USER_ID}/sessions/revoke-all \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "X-Admin-Confirm: true"
+```
+
+To un-suspend, repeat step 1 with `"status":"ACTIVE"`. Status changes are audit-logged with action `USER_STATUS_CHANGED`.
+
+### Refund a payment
+
+Refunds are admin-only and require the `payments:refund:any` permission. The refund triggers a debit ledger entry and (if the provider supports it) a callback to ZarinPal.
+
+1. Admin shell → **بازگشت وجه** → look up payment by ID or by user phone.
+2. Select the payment → click **بازگشت کامل** (full) or **بازگشت بخشی** (partial; enter amount in toman).
+3. Enter the reason (min 10 chars).
+4. Confirm. The refund row appears with status `PENDING_PROVIDER`; the provider callback flips it to `SUCCEEDED` (or `FAILED` if the provider rejects).
+
+Or via API:
+
+```bash
+PAYMENT_ID=<bigint>
+TOKEN=<bearer-jwt>
+
+curl -sS -X POST https://app.saziqo.ir/api/v1/admin/payments/${PAYMENT_ID}/refund \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "X-Admin-Confirm: true" \
+  -H "Content-Type: application/json" \
+  -d '{"amount":50000,"reason":"User reported duplicate charge"}'
+```
+
+Audit action: `PAYMENT_REFUNDED`. Ledger impact: a debit on the user wallet equal to `amount`. If the user's balance would go negative, the refund still proceeds — negative balances are tolerated for refund flows and surfaced in the daily reconciliation report.
+
+### Force-revoke a session
+
+User-initiated logouts are routine. Admin-initiated revocation is for compromise scenarios:
+
+```bash
+TOKEN=<bearer-jwt>
+USER_ID=<bigint>
+SESSION_ID=<bigint>     # from /admin/users/:id detail page
+
+curl -sS -X DELETE https://app.saziqo.ir/api/v1/admin/users/${USER_ID}/sessions/${SESSION_ID} \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "X-Admin-Confirm: true"
+```
+
+The next refresh attempt with that token returns 401 `SESSION_INVALID`.
+
+### Review the audit log
+
+Admin shell → **گزارش حسابرسی**. Filters: action code, actor, resource, date range, success/failure flag.
+
+Or via API for scripted exports:
+
+```bash
+TOKEN=<bearer-jwt>
+
+# Last 24h of impersonation start/stop events
+curl -sS "https://app.saziqo.ir/api/v1/admin/audit?action=IMPERSONATION_STARTED,IMPERSONATION_STOPPED&since=$(date -u -d '24 hours ago' +%FT%TZ)" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  | jq '.data'
+```
+
+The audit table is append-only — no UPDATE or DELETE permissions are granted to any role. Exporting via SQL directly:
+
+```bash
+make prod-db-shell
+```
+
+```sql
+COPY (SELECT * FROM audit_log WHERE created_at >= now() - interval '24 hours' ORDER BY id DESC) TO STDOUT WITH CSV HEADER;
+```
+
+### Toggle a module on/off
+
+Module enablement is an environment variable read at process start; toggling requires a restart.
+
+1. Edit `/opt/saziqo-platform/current/.env.production`:
+   ```
+   ENABLE_AGENTS_MODULE=false
+   ```
+2. Restart api:
+   ```bash
+   docker compose -f /opt/saziqo-platform/current/infra/docker/docker-compose.prod.yml \
+     --env-file /opt/saziqo-platform/current/.env.production restart api
+   ```
+3. Confirm:
+   ```bash
+   curl -sS https://app.saziqo.ir/api/v1/admin/registry/modules \
+     -H "Authorization: Bearer ${TOKEN}" | jq '.data[] | select(.name=="agents")'
+   ```
+
+A disabled module's routes return 404. See `docs/module-contract.md` § Enable/disable behavior.
+
+---
+
+## Monitoring
+
+### What we have today
+
+- **Health endpoint** — `GET /api/v1/health` returns 200 (all checks pass) or 503 (any check fails). Suitable for any HTTP probe.
+- **Structured logs** — Pino JSON to `/var/log/saziqo-api/api.log` (logrotate-managed). Caddy access logs to `/var/log/caddy/access.log`.
+- **Container restart loop** — Docker Compose `restart: unless-stopped` brings any crashed service back; `docker compose ps` shows uptime.
+- **Backup completion log** — `/var/log/saziqo-backup.log` records every cron run (success + failure).
+
+### What's deferred to v1.5
+
+- **External uptime probe** — UptimeRobot or self-hosted Uptime Kuma against `https://app.saziqo.ir/api/v1/health`. Until then, the daily-ops health check (above) is the only liveness signal. **Set up an external probe before public launch.**
+- **Error tracking** — GlitchTip or self-hosted Sentry-compatible. Today, Pino-emitted error lines are the only error stream; review them as part of daily ops.
+- **Metrics + dashboards** — Prometheus + Grafana. Today, capacity is monitored by eyeballing `htop` and `docker stats`.
+- **Alerting** — no automated paging in MVP. The on-call rotation is "whoever is awake."
+
+### Manual liveness checks
+
+```bash
+# From any external network (proves Caddy + DNS + TLS + upstream are all good)
+curl -fsS https://app.saziqo.ir/api/v1/health || echo "DOWN"
+
+# Container-level (from the VPS)
+ssh deploy@app.saziqo.ir 'docker compose -f /opt/saziqo-platform/current/infra/docker/docker-compose.prod.yml --env-file /opt/saziqo-platform/current/.env.production ps'
+
+# Resource pressure
+ssh deploy@app.saziqo.ir 'docker stats --no-stream'
+ssh deploy@app.saziqo.ir 'df -h /opt /var'
+```
+
+### Disk fill watch
+
+The two volumes that grow without bound:
+
+- `/opt/saziqo-platform/shared/postgres-data` — bounded by data growth
+- `/opt/saziqo-platform/backups/` — bounded by 14-day retention; spikes if cron skipped a delete
+
+`df -h` weekly. At 80% on the data volume, plan a VPS resize before reaching 95%.
+
+---
+
+## Incident response
+
+A short, generic playbook. Specific runbooks for hardening / fail2ban / SSH lockout live in `docs/security.md` § Incident response.
+
+### Severity definitions
+
+| Level  | Definition                                            | Example                                                             | Response time              |
+| ------ | ----------------------------------------------------- | ------------------------------------------------------------------- | -------------------------- |
+| **P1** | Site is down or data is being lost / leaked           | `/health` returning 503; database disk full; payment double-charge  | Immediate, drop everything |
+| **P2** | A core flow is broken for a meaningful share of users | Login failing for one IDP; payouts stuck                            | Within 1 hour              |
+| **P3** | A non-critical flow is broken or degraded             | Notification email not sending (deferred MTA); admin shell sluggish | Within 1 working day       |
+| **P4** | Cosmetic, non-urgent                                  | A typo in a Persian label                                           | Next regular sprint        |
+
+### P1 / P2 procedure
+
+1. **Acknowledge** in the team channel — even a "I'm on it" so others don't pile on.
+2. **Triage**: is this happening to everyone, or one user / one path? Check `/health`, the API error log, the Caddy access log for the failing path's status code.
+3. **Stop the bleeding** before fixing the root cause:
+   - Bad release → rollback (see Quick reference at top of this doc).
+   - Resource exhaustion → restart the affected container.
+   - Compromised credential → rotate (see `docs/security.md` § Secret rotation).
+4. **Fix the root cause** — in code if it was a code bug; in infra if it was an infra bug. Record what you did in the incident channel as you go.
+5. **Verify** — re-run the failing path manually, watch logs for 5 minutes after.
+6. **Post-incident write-up** — same day or next morning. Three sections: what happened, why, what we changed so it can't happen the same way again. Drop it in `docs/incidents/YYYY-MM-DD-<short-name>.md` for the historical record (create the directory the first time you need it).
+
+### Common stop-the-bleeding commands
+
+```bash
+# Restart api only (most app issues)
+ssh deploy@app.saziqo.ir
+docker compose -f /opt/saziqo-platform/current/infra/docker/docker-compose.prod.yml \
+  --env-file /opt/saziqo-platform/current/.env.production restart api
+
+# Restart everything except the DB (full app reset)
+docker compose -f /opt/saziqo-platform/current/infra/docker/docker-compose.prod.yml \
+  --env-file /opt/saziqo-platform/current/.env.production restart api web meilisearch redis
+
+# Force-pull the most recent release symlink (if you've already deployed a fix)
+docker compose -f /opt/saziqo-platform/current/infra/docker/docker-compose.prod.yml \
+  --env-file /opt/saziqo-platform/current/.env.production up -d --force-recreate
+
+# Take the site offline (flip Caddy to a maintenance page — TODO: add to Caddyfile)
+sudo systemctl stop caddy   # last resort; users see a TLS error, not a maintenance page
+```
+
+### Escalation path
+
+There is no formal on-call rotation in MVP. The maintainer (`s.karimi1006@gmail.com`) is the escalation point. For a security incident in particular (suspected breach, credential exposure), see `docs/security.md` § Incident response and rotate every secret listed there before resuming normal operations.

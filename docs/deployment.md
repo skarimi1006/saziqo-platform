@@ -1,6 +1,80 @@
 # Deployment — saziqo Platform
 
-Operational runbook for the production deployment. Sections are added as each phase in Group 15 lands. The full document is owned by Phase 24F.
+Operational runbook for the production deployment. Read end-to-end before the first production deploy; thereafter use the section headings as a jump table.
+
+Cross-references:
+
+- `docs/operations.md` — day-2 procedures (backups, restore, common admin tasks, incident response)
+- `docs/security.md` — hardening, vulnerability management, secret rotation
+- `docs/server-setup.md` — VPS rental, DNS, initial root → deploy SSH
+
+---
+
+## Quick reference
+
+```bash
+# Routine deploy from your workstation, on main, clean tree
+./infra/scripts/deploy.sh                          # or: make deploy
+
+# Tail prod logs
+make prod-logs                                     # api + web + caddy
+
+# Health
+curl -sS https://app.saziqo.ir/api/v1/health       # → {"data":{"status":"ok"}}
+
+# Open a shell into the api container
+make prod-shell-api
+
+# Rollback (atomic symlink swap)
+ssh deploy@app.saziqo.ir
+ln -sfn /opt/saziqo-platform/releases/<previous-ts> /opt/saziqo-platform/current
+docker compose -f /opt/saziqo-platform/current/infra/docker/docker-compose.prod.yml \
+  --env-file /opt/saziqo-platform/current/.env.production up -d --force-recreate
+```
+
+---
+
+## Pre-deploy checklist
+
+Run through this list **before every production deploy**. Items 1–6 are local; 7–9 are remote.
+
+1. **Branch + tree clean**
+   ```bash
+   git rev-parse --abbrev-ref HEAD     # → main
+   git status                          # → nothing to commit
+   ```
+2. **Lockfile in sync**
+   ```bash
+   pnpm install --frozen-lockfile      # exits 0
+   ```
+3. **All checks green**
+   ```bash
+   pnpm typecheck && pnpm lint && pnpm test
+   ```
+4. **Security scan clean**
+   ```bash
+   pnpm scan:deps                      # exits 0; report at scan-report.txt
+   ```
+5. **Audit clean** (deploy.sh runs `--audit-level=high`; you can pre-check with stricter)
+   ```bash
+   pnpm audit --audit-level=moderate
+   ```
+6. **Docker daemon up**
+   ```bash
+   docker info >/dev/null              # exits 0
+   ```
+7. **SSH to VPS works without prompt**
+   ```bash
+   ssh deploy@app.saziqo.ir whoami     # → deploy
+   ```
+8. **`.env.production` staged on VPS, no `CHANGE_ME` placeholders**
+   ```bash
+   ssh deploy@app.saziqo.ir 'grep -c CHANGE_ME /opt/saziqo-platform/current/.env.production || true'
+   # → 0
+   ```
+9. **Migrations reviewed** — open `apps/api/prisma/migrations/` and confirm any new SQL is reversible-in-spirit (no DROP COLUMN on a populated column without a follow-up)
+
+If any item fails, **do not deploy**. Fix the cause, then re-run the list from the top.
 
 ---
 
@@ -312,6 +386,60 @@ journalctl -u caddy -f
 # Backup log
 tail -F /var/log/saziqo-backup.log
 ```
+
+### Emergency hotfix procedure
+
+For a critical production fix that must ship faster than the normal deploy can run (audit blocked, test flaking, etc.). Use sparingly — every shortcut here is a safety net you removed.
+
+1. **Confirm the fix is correct** — write the patch on a branch, run the affected unit tests locally, manually exercise the broken path against a local stack.
+2. **Open the smallest possible PR** — single-purpose, no incidental refactors. Get a second pair of eyes if anyone is around. The PR exists for the audit trail even if you merge yourself.
+3. **Merge to main**:
+   ```bash
+   git checkout main
+   git pull --ff-only
+   git merge --no-ff hotfix/<short-name>
+   git push
+   ```
+4. **Skip-flag the deploy** only for the gates that would otherwise block:
+
+   ```bash
+   # Failing audit (already known, triaged elsewhere)
+   FORCE_DEPLOY=1 ./infra/scripts/deploy.sh
+
+   # Trivy/pnpm-audit blocked (rare — only if vuln is unrelated to the fix)
+   SKIP_SECURITY_SCAN=1 ./infra/scripts/deploy.sh
+
+   # Both
+   FORCE_DEPLOY=1 SKIP_SECURITY_SCAN=1 ./infra/scripts/deploy.sh
+   ```
+
+   Document the reason in the team channel before kicking it off.
+
+5. **Watch the deploy live** — don't walk away:
+   ```bash
+   ssh deploy@app.saziqo.ir 'tail -F /var/log/saziqo-api/api.log'
+   ```
+   The script auto-rolls-back on health failure, but a hotfix that subtly worsens behaviour without breaking `/health` will only be caught by you.
+6. **Smoke test the fix in production**:
+   ```bash
+   curl -sS https://app.saziqo.ir/api/v1/health
+   # then exercise the actual broken path manually
+   ```
+7. **File the post-incident debt** — every skipped check creates a follow-up: re-run the failing audit, restore the test that was flaking, etc. Track these in your issue tracker before closing the incident.
+
+If the hotfix itself goes bad, **rollback**:
+
+```bash
+ssh deploy@app.saziqo.ir
+ln -sfn /opt/saziqo-platform/releases/<previous-ts> /opt/saziqo-platform/current
+docker compose -f /opt/saziqo-platform/current/infra/docker/docker-compose.prod.yml \
+  --env-file /opt/saziqo-platform/current/.env.production up -d --force-recreate
+curl -sS http://localhost:3001/api/v1/health
+```
+
+If the rollback target itself was the bug, restore from backup — see `docs/operations.md` § Disaster Recovery.
+
+---
 
 ### Troubleshooting deploy failures
 
