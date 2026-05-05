@@ -7,6 +7,7 @@ import { NotificationChannel } from '@prisma/client';
 
 import { AppModule } from '../../src/app.module';
 import { ErrorCode } from '../../src/common/types/response.types';
+import { CartAggregatorService } from '../../src/core/cart/cart-aggregator.service';
 import { ModuleRegistryService } from '../../src/core/module-registry/module-registry.service';
 import {
   type NotificationRow,
@@ -26,6 +27,7 @@ describe('agents module boot — smoke test (Phase 1D)', () => {
   let notifications: NotificationsService;
   let payments: PaymentsService;
   let registry: ModuleRegistryService;
+  let cartAggregator: CartAggregatorService;
 
   beforeAll(async () => {
     const moduleRef: TestingModule = await Test.createTestingModule({
@@ -39,6 +41,7 @@ describe('agents module boot — smoke test (Phase 1D)', () => {
     notifications = app.get(NotificationsService);
     payments = app.get(PaymentsService);
     registry = app.get(ModuleRegistryService);
+    cartAggregator = app.get(CartAggregatorService);
   });
 
   afterAll(async () => {
@@ -100,5 +103,55 @@ describe('agents module boot — smoke test (Phase 1D)', () => {
     const pages = registry.mergeAdminPages();
     const paths = pages.map((p) => p.path);
     expect(paths).toContain('/admin/agents/listings');
+  });
+
+  // Test Gate 1 — full-coverage assertions
+
+  it('registers the agents PlatformModule with the registry', () => {
+    const mod = registry.getByName('agents');
+    expect(mod).toBeDefined();
+    expect(mod?.version).toBe('0.1.0');
+    expect(mod?.enabled).toBe(true);
+  });
+
+  it('registers all 9 agents notification templates', () => {
+    const expected = [
+      'AGENTS_LISTING_APPROVED',
+      'AGENTS_LISTING_REJECTED',
+      'AGENTS_LISTING_SUSPENDED',
+      'AGENTS_PURCHASE_RECEIPT',
+      'AGENTS_NEW_SALE',
+      'AGENTS_RUNS_LOW',
+      'AGENTS_RUNS_DEPLETED',
+      'AGENTS_REVIEW_POSTED',
+      'AGENTS_NEW_LISTING_PENDING',
+    ];
+    for (const type of expected) {
+      expect(registry.getNotificationTypeOwner(type)).toBe('agents');
+    }
+  });
+
+  it('merges both agents payment purposes into the registry', () => {
+    const purposes = registry.mergePaymentPurposes();
+    expect(purposes).toEqual(expect.arrayContaining(['agents_purchase', 'agents_run_pack']));
+  });
+
+  it('exposes all 5 agents admin pages via the registry', () => {
+    const pages = registry.mergeAdminPages();
+    const agentsPaths = pages.map((p) => p.path).filter((p) => p.startsWith('/admin/agents/'));
+    expect(agentsPaths).toEqual(
+      expect.arrayContaining([
+        '/admin/agents/listings',
+        '/admin/agents/categories',
+        '/admin/agents/featured',
+        '/admin/agents/sales',
+        '/admin/agents/settings',
+      ]),
+    );
+    expect(agentsPaths).toHaveLength(5);
+  });
+
+  it('registers the agents cart adapter with the cart aggregator on boot', () => {
+    expect(cartAggregator.getRegisteredModuleSources()).toContain('agents');
   });
 });

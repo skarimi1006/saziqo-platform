@@ -30,4 +30,8 @@ export class CartAggregatorService {
   async clearForUser(userId: bigint): Promise<void> {
     await Promise.all(Array.from(this.adapters.values()).map((a) => a.clearForUser(userId)));
   }
+
+  getRegisteredModuleSources(): string[] {
+    return Array.from(this.adapters.keys()).sort();
+  }
 }
