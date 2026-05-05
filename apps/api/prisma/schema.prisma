@@ -48,6 +48,15 @@ model User {
   payments          Payment[]
   requestedRefunds  Refund[]        @relation("RefundRequester")
 
+  // Agents module back-relations (module owns the child tables; FKs land
+  // in apps/api/src/modules/agents/ Phase 1A migration).
+  agentsListings    agents_listing[]
+  agentsCartItems   agents_cart_item[]
+  agentsPurchases   agents_purchase[]
+  agentsUserRuns    agents_user_runs[]
+  agentsRunEvents   agents_run_event[]
+  agentsReviews     agents_review[]
+
   @@index([status])
   @@index([deletedAt])
   @@map("users")
@@ -293,6 +302,10 @@ model File {
 
   owner User @relation(fields: [ownerUserId], references: [id])
 
+  // Agents module back-relations
+  agentsListingsAsBundle agents_listing[]    @relation("AgentsListingBundle")
+  agentsScreenshots      agents_screenshot[]
+
   @@index([ownerUserId])
   @@index([deletedAt])
   @@map("files")
@@ -371,6 +384,12 @@ model Payment {
   user    User     @relation(fields: [userId], references: [id])
   refunds Refund[]
 
+  // Agents module back-relation — populated when payments turn on for
+  // agents_purchase rows (locked-decision: schema is payment-ready, but
+  // the agents module creates COMPLETED purchases without a Payment row
+  // until the system flips ZarinPal live).
+  agentsPurchases agents_purchase[]
+
   @@index([userId])
   @@index([status])
   @@index([providerReference])
@@ -426,4 +445,260 @@ model ModuleInstall {
   installedAt DateTime @default(now())
 
   @@map("modules_installed")
+}
+
+// ─── Agents Module ───────────────────────────────────────────────────
+// CLAUDE: All `agents_*` tables are owned by apps/api/src/modules/agents.
+// Schema appended here because Prisma uses a single schema file for the
+// monorepo. Module rules still apply: no other module touches these tables;
+// the agents module never reaches into another module's tables. Append-only
+// trigger on agents_run_event is added in the agents_append_only_triggers
+// migration, not declarable in Prisma DSL.
+
+model agents_category {
+  id         BigInt   @id @default(autoincrement())
+  slug       String   @unique @db.VarChar(80)
+  nameFa     String   @db.VarChar(100)
+  iconKey    String   @db.VarChar(40)
+  colorToken String   @db.VarChar(20)
+  order      Int      @default(0)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  listings agents_listing[]
+
+  @@index([order])
+  @@index([isActive])
+}
+
+model agents_listing {
+  id                      BigInt    @id @default(autoincrement())
+  slug                    String    @unique @db.VarChar(120)
+  titleFa                 String    @db.VarChar(200)
+  shortDescFa             String    @db.VarChar(300)
+  longDescFaMd            String
+  installInstructionsFaMd String?
+  categoryId              BigInt
+  makerUserId             BigInt
+  pricingType             AgentsPricingType
+  oneTimePriceToman       BigInt?
+  status                  AgentsListingStatus @default(DRAFT)
+  rejectionReason         String?   @db.VarChar(500)
+  suspensionReason        String?   @db.VarChar(500)
+  isFeatured              Boolean   @default(false)
+  featuredOrder           Int?
+  bundleFileId            BigInt?
+  // SECURITY: apiKeyHash is sha256 of the per-listing run-consume API key.
+  // The plaintext key is returned exactly once on rotation (Phase 4E) and
+  // never persisted. apiKeyPreview holds the last 8 chars for UI only.
+  apiKeyHash              String?   @db.VarChar(64)
+  apiKeyPreview           String?   @db.VarChar(20)
+  // Denormalized counters; kept in sync from purchase / run-consume paths.
+  totalUsers              BigInt    @default(0)
+  totalRuns               BigInt    @default(0)
+  ratingAverage           Decimal?  @db.Decimal(3, 2)
+  ratingCount             BigInt    @default(0)
+  // Postgres FTS column populated by trigger added in Phase 1E migration.
+  searchVector            Unsupported("tsvector")?
+  publishedAt             DateTime?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+  deletedAt               DateTime?
+
+  category    agents_category    @relation(fields: [categoryId], references: [id])
+  maker       User               @relation(fields: [makerUserId], references: [id])
+  bundleFile  File?              @relation("AgentsListingBundle", fields: [bundleFileId], references: [id])
+  screenshots agents_screenshot[]
+  runPacks    agents_run_pack[]
+  cartItems   agents_cart_item[]
+  purchases   agents_purchase[]
+  userRuns    agents_user_runs[]
+  runEvents   agents_run_event[]
+  reviews     agents_review[]
+
+  @@index([status, publishedAt])
+  @@index([categoryId, status])
+  @@index([makerUserId])
+  @@index([isFeatured, featuredOrder])
+  @@index([deletedAt])
+}
+
+enum AgentsPricingType {
+  FREE
+  ONE_TIME
+  PER_RUN
+}
+
+enum AgentsListingStatus {
+  DRAFT
+  PENDING_REVIEW
+  PUBLISHED
+  REJECTED
+  SUSPENDED
+}
+
+model agents_screenshot {
+  id        BigInt  @id @default(autoincrement())
+  listingId BigInt
+  fileId    BigInt
+  order     Int     @default(0)
+  altTextFa String? @db.VarChar(200)
+
+  listing agents_listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  file    File           @relation(fields: [fileId], references: [id])
+
+  @@index([listingId, order])
+}
+
+model agents_run_pack {
+  // Run-pack definitions on a PER_RUN listing. 1–5 packs per listing.
+  id         BigInt   @id @default(autoincrement())
+  listingId  BigInt
+  nameFa     String   @db.VarChar(80)
+  runs       BigInt
+  priceToman BigInt
+  order      Int      @default(0)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  listing   agents_listing     @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  cartItems agents_cart_item[]
+  purchases agents_purchase[]
+
+  @@index([listingId, order])
+}
+
+model agents_cart_item {
+  id        BigInt   @id @default(autoincrement())
+  // userId is nullable so a guest cart item can be persisted post-merge
+  // even if the originating user row was removed; the live merge flow
+  // (Phase 3A) writes userId on every row.
+  userId    BigInt?
+  listingId BigInt
+  runPackId BigInt?
+  addedAt   DateTime @default(now())
+
+  user    User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
+  listing agents_listing   @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  runPack agents_run_pack? @relation(fields: [runPackId], references: [id])
+
+  @@unique([userId, listingId, runPackId])
+  @@index([userId, addedAt])
+}
+
+model agents_purchase {
+  // SECURITY: append-only by convention except for refund-status flips —
+  // see CLAUDE.md "Append-only enforcement". No DB trigger here; the
+  // refund path is the only mutation surface and is audited via
+  // AGENTS_PURCHASE_REFUNDED.
+  id                BigInt   @id @default(autoincrement())
+  userId            BigInt
+  listingId         BigInt
+  pricingTypeAtSale AgentsPricingType
+  runPackId         BigInt?
+  runsGranted       BigInt   @default(0)
+  amountToman       BigInt
+  commissionToman   BigInt
+  makerEarnedToman  BigInt
+  systemPaymentId   BigInt?
+  status            AgentsPurchaseStatus @default(COMPLETED)
+  refundReason      String?  @db.VarChar(500)
+  createdAt         DateTime @default(now())
+  refundedAt        DateTime?
+
+  user          User             @relation(fields: [userId], references: [id])
+  listing       agents_listing   @relation(fields: [listingId], references: [id])
+  runPack       agents_run_pack? @relation(fields: [runPackId], references: [id])
+  systemPayment Payment?         @relation(fields: [systemPaymentId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([listingId, createdAt])
+  @@index([status])
+}
+
+enum AgentsPurchaseStatus {
+  COMPLETED
+  REFUNDED
+}
+
+model agents_user_runs {
+  // Per-user, per-listing remaining run counter (PER_RUN pricing). Cumulative.
+  id             BigInt    @id @default(autoincrement())
+  userId         BigInt
+  listingId      BigInt
+  remainingRuns  BigInt    @default(0)
+  totalGranted   BigInt    @default(0)
+  totalConsumed  BigInt    @default(0)
+  lastConsumedAt DateTime?
+
+  user    User           @relation(fields: [userId], references: [id])
+  listing agents_listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, listingId])
+  @@index([userId])
+  @@index([listingId])
+}
+
+model agents_run_event {
+  // SECURITY: append-only — DB triggers in agents_append_only_triggers
+  // migration block UPDATE/DELETE on this table for analytics +
+  // dispute-resolution integrity.
+  id        BigInt   @id @default(autoincrement())
+  userId    BigInt
+  listingId BigInt
+  outcome   AgentsRunOutcome
+  ipAddress String?  @db.VarChar(45)
+  userAgent String?  @db.VarChar(255)
+  createdAt DateTime @default(now())
+
+  user    User           @relation(fields: [userId], references: [id])
+  listing agents_listing @relation(fields: [listingId], references: [id])
+
+  @@index([userId, listingId, createdAt])
+  @@index([listingId, createdAt])
+}
+
+enum AgentsRunOutcome {
+  CONSUMED
+  REFUSED_INSUFFICIENT
+  REFUSED_INVALID_KEY
+}
+
+model agents_review {
+  id           BigInt   @id @default(autoincrement())
+  listingId    BigInt
+  authorUserId BigInt
+  rating       Int
+  bodyFa       String?  @db.VarChar(2000)
+  isHidden     Boolean  @default(false)
+  hiddenReason String?  @db.VarChar(500)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  listing agents_listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  author  User           @relation(fields: [authorUserId], references: [id])
+
+  @@unique([listingId, authorUserId])
+  @@index([listingId, createdAt])
+  @@index([authorUserId])
+}
+
+model agents_settings {
+  // Singleton row (id = 1). Admin-editable. Bootstrap upserts in Phase 1C.
+  id                        BigInt   @id @default(1)
+  commissionPercent         Int      @default(20)
+  heroTitleFa               String   @default("عامل‌های فارسی، به دست سازندگان ایرانی.") @db.VarChar(200)
+  heroSubtitleFa            String   @default("از پنل کشف عامل‌های آماده، تا استودیوی انتشار و کسب درآمد — همه در یک جا، با پرداخت ریالی، روی سرور ایران.") @db.VarChar(500)
+  showFeaturedSection       Boolean  @default(true)
+  showCategoriesSection     Boolean  @default(true)
+  showBestSellersSection    Boolean  @default(true)
+  showNewReleasesSection    Boolean  @default(true)
+  showRecentActivitySection Boolean  @default(true)
+  featuredItemCount         Int      @default(6)
+  bestSellersItemCount      Int      @default(8)
+  newReleasesItemCount      Int      @default(8)
+  updatedAt                 DateTime @updatedAt
+  updatedByUserId           BigInt?
 }
