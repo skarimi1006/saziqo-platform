@@ -21,8 +21,8 @@
 
 import type { PlatformModule } from './core/module-registry/types';
 import exampleModule from './modules/_example';
+import agentsModule from './modules/agents';
 
-// import agentsModule from './modules/agents';
 // import buildersModule from './modules/builders';
 // import templatesModule from './modules/templates';
 
@@ -31,6 +31,8 @@ export const MODULES: PlatformModule[] = [
   // Controlled via ENABLE_EXAMPLE_MODULE env var (default true in dev,
   // false in production). Set ENABLE_EXAMPLE_MODULE=false in production.
   exampleModule,
-  // agentsModule,
+  // Agents marketplace (Phase 1B onward). Controlled via ENABLE_AGENTS_MODULE
+  // (default true in dev, false in production).
+  agentsModule,
   // buildersModule,
 ];
