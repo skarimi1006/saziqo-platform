@@ -546,3 +546,91 @@ sudo systemctl stop caddy   # last resort; users see a TLS error, not a maintena
 ### Escalation path
 
 There is no formal on-call rotation in MVP. The maintainer (`s.karimi1006@gmail.com`) is the escalation point. For a security incident in particular (suspected breach, credential exposure), see `docs/security.md` § Incident response and rotate every secret listed there before resuming normal operations.
+
+---
+
+## Agents Marketplace Module
+
+Business module for the two-sided AI-agent marketplace. Controlled by `ENABLE_AGENTS_MODULE` in `.env.production`.
+
+### Enable / disable
+
+The module defaults to `false` in production. Set the flag and restart the API container (see Common admin tasks § Toggle a module on/off). When disabled, all `/api/v1/agents/*` routes return 404 and the bootstrap hooks are skipped — schema and seeded rows remain untouched.
+
+### First-boot checklist
+
+On a fresh deployment, after `pnpm --filter api db:migrate-dev` (or `db:migrate-deploy` in production):
+
+1. Start the API — the `SettingsBootstrapService` and `CategoriesBootstrapService` run `OnApplicationBootstrap` and emit:
+   - `[agents] settings: ensured singleton row`
+   - `[agents] categories: ensured 7 default categories`
+2. Verify in the database:
+   ```sql
+   SELECT count(*) FROM agents_category;    -- 7
+   SELECT id, "commissionPercent" FROM agents_settings;  -- id=1, 20
+   SELECT count(*) FROM permission WHERE code LIKE 'agents:%';  -- 14
+   ```
+
+### Moderating listings
+
+All listings enter state `PENDING_REVIEW` on submission and are not visible in the public catalog until an admin approves them.
+
+Admin shell → **لیستینگ‌ها** → filter by status `PENDING_REVIEW` → click a listing → **تأیید** (approve) or **رد** (reject, reason required) or **تعلیق** (suspend).
+
+Or via API (requires `agents:moderate:listing` permission):
+
+```bash
+TOKEN=<bearer-jwt>
+LISTING_ID=<bigint>
+
+# Approve
+curl -sS -X POST "https://app.saziqo.ir/api/v1/agents/admin/listings/${LISTING_ID}/approve" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "X-Admin-Confirm: true"
+
+# Reject
+curl -sS -X POST "https://app.saziqo.ir/api/v1/agents/admin/listings/${LISTING_ID}/reject" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "X-Admin-Confirm: true" \
+  -H "Content-Type: application/json" \
+  -d '{"reason":"محتوا با دستورالعمل‌های بازارگاه مطابقت ندارد."}'
+```
+
+Audit actions: `AGENTS_LISTING_APPROVED`, `AGENTS_LISTING_REJECTED`, `AGENTS_LISTING_SUSPENDED`.
+
+### Editing marketplace settings
+
+Settings live in the singleton `agents_settings` row (id=1). Admin shell → **تنظیمات بازارگاه** (requires `agents:manage:settings`).
+
+Key fields:
+
+| Field                 | Default | Effect                                              |
+| --------------------- | ------- | --------------------------------------------------- |
+| `commissionPercent`   | 20      | Frozen on each `agents_purchase.commissionSnapshot` |
+| `heroTitleFa`         | (set)   | H1 on the marketplace homepage                      |
+| `showFeaturedSection` | true    | Toggles featured listings carousel                  |
+| `featuredItemCount`   | 6       | Cards shown in the featured row                     |
+
+The bootstrap service uses `update: {}` — it never overwrites admin edits on restart.
+
+### Managing categories
+
+Admin shell → **دسته‌بندی‌ها** (requires `agents:manage:categories`). Slugs are immutable once created (they appear in listing URLs). To deactivate a category without breaking existing listings, set `isActive = false` via the shell — it disappears from the public filter bar but linked listings remain accessible by direct URL.
+
+The 7 default categories and their slugs:
+
+| Slug       | Persian name     |
+| ---------- | ---------------- |
+| `research` | پژوهش            |
+| `business` | کسب و کار        |
+| `design`   | تصویر و طراحی    |
+| `voice`    | صدا و گفتار      |
+| `data`     | تحلیل داده       |
+| `code`     | برنامه‌نویسی     |
+| `content`  | نویسندگی و محتوا |
+
+### Monitoring hints
+
+- **Pending review backlog:** `SELECT count(*) FROM agents_listing WHERE status = 'PENDING_REVIEW';` — spikes mean moderation queue is building up.
+- **Run exhaustion rate:** `SELECT count(*) FROM agents_run_event WHERE outcome = 'REFUSED_INSUFFICIENT' AND "createdAt" > now() - interval '24 hours';` — a non-zero count means buyers are hitting empty run counters; check notification delivery for `AGENTS_RUNS_DEPLETED`.
+- **Sales volume:** `SELECT count(*), sum("amountToman") FROM agents_purchase WHERE status = 'COMPLETED' AND "completedAt" > now() - interval '7 days';`
