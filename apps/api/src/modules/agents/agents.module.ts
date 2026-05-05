@@ -10,6 +10,7 @@ import { AgentsCheckoutController } from './controllers/checkout.controller';
 import { AgentsDownloadController } from './controllers/download.controller';
 import { AgentsLibraryController } from './controllers/library.controller';
 import { ListingsController } from './controllers/listings.controller';
+import { AgentsRunsController } from './controllers/runs.controller';
 import { SearchController } from './controllers/search.controller';
 import { SectionsController } from './controllers/sections.controller';
 import { AgentsCartAdapterService } from './services/cart-adapter.service';
@@ -20,6 +21,7 @@ import { CheckoutService } from './services/checkout.service';
 import { DownloadService } from './services/download.service';
 import { LibraryService } from './services/library.service';
 import { ListingsService } from './services/listings.service';
+import { RunsService } from './services/runs.service';
 import { SettingsBootstrapService } from './services/settings.bootstrap';
 
 @Module({
@@ -29,6 +31,7 @@ import { SettingsBootstrapService } from './services/settings.bootstrap';
     AgentsCheckoutController,
     AgentsDownloadController,
     AgentsLibraryController,
+    AgentsRunsController,
     CatalogController,
     CategoriesController,
     ListingsController,
@@ -45,6 +48,7 @@ import { SettingsBootstrapService } from './services/settings.bootstrap';
     DownloadService,
     LibraryService,
     ListingsService,
+    RunsService,
     OptionalJwtAuthGuard,
   ],
   exports: [
@@ -54,6 +58,7 @@ import { SettingsBootstrapService } from './services/settings.bootstrap';
     CheckoutService,
     DownloadService,
     LibraryService,
+    RunsService,
   ],
 })
 export class AgentsModule {}

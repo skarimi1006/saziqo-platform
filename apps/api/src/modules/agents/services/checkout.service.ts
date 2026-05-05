@@ -9,6 +9,9 @@ import {
 import { ErrorCode } from '../../../common/types/response.types';
 import { NotificationsService } from '../../../core/notifications/notifications.service';
 import { PrismaService } from '../../../core/prisma/prisma.service';
+import { RedisService } from '../../../core/redis/redis.service';
+
+import { lowRunsDedupKey } from './runs.service';
 
 export interface CheckoutLineSummary {
   purchaseId: string;
@@ -59,6 +62,7 @@ interface PostCommitPlan {
   buyerUserId: bigint;
   receipts: Array<{ listingTitleFa: string; runs: bigint }>;
   sales: Array<{ makerUserId: bigint; listingTitleFa: string }>;
+  perRunListingIds: bigint[];
 }
 
 const DEFAULT_COMMISSION_PERCENT = 20;
@@ -77,6 +81,7 @@ export class CheckoutService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
+    private readonly redis: RedisService,
   ) {}
 
   async checkout(userId: bigint): Promise<CheckoutSummary> {
@@ -88,7 +93,20 @@ export class CheckoutService {
       this.logger.error(`Post-commit notifications failed: ${String(err)}`),
     );
 
+    // Top-up clears the low-runs dedup key so the next time the buyer's
+    // balance crosses the 10% threshold, RunsService can warn them again.
+    void this.clearLowRunsDedup(userId, postCommit.perRunListingIds).catch((err) =>
+      this.logger.error(`Low-runs dedup clear failed: ${String(err)}`),
+    );
+
     return summary;
+  }
+
+  private async clearLowRunsDedup(userId: bigint, listingIds: bigint[]): Promise<void> {
+    if (listingIds.length === 0) return;
+    const client = this.redis.getClient();
+    const keys = listingIds.map((id) => lowRunsDedupKey(userId, id));
+    await client.del(...keys);
   }
 
   private async runWithSerializationRetry(
@@ -279,6 +297,7 @@ export class CheckoutService {
         let totalAmountToman = 0n;
         const sales: PostCommitPlan['sales'] = [];
         const receipts: PostCommitPlan['receipts'] = [];
+        const perRunListingIds: bigint[] = [];
 
         for (const line of built) {
           // Detect first-time buyer BEFORE inserting the new purchase row.
@@ -323,6 +342,7 @@ export class CheckoutService {
                 totalGranted: { increment: line.pack.runs },
               },
             });
+            perRunListingIds.push(line.listing.id);
           }
 
           if (!priorPurchase) {
@@ -367,6 +387,7 @@ export class CheckoutService {
           buyerUserId: userId,
           receipts,
           sales,
+          perRunListingIds,
         };
 
         return { summary: summaryOut, postCommit: postCommitOut };
