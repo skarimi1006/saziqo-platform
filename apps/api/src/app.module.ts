@@ -11,6 +11,7 @@ import { ConfigModule } from './config/config.module';
 import { TestModule } from './core/_test/test.module';
 import { AuditModule } from './core/audit/audit.module';
 import { AuthModule } from './core/auth/auth.module';
+import { CartModule } from './core/cart/cart.module';
 import { FilesModule } from './core/files/files.module';
 import { HealthModule } from './core/health/health.module';
 import { ImpersonationModule } from './core/impersonation/impersonation.module';
@@ -82,6 +83,7 @@ const ENABLED_MODULE_IMPORTS: Type<unknown>[] = MODULES.filter((m) => m.enabled)
     WalletsModule,
     PayoutsModule,
     PaymentsModule,
+    CartModule,
     ModuleRegistryModule,
     TestModule,
     ...ENABLED_MODULE_IMPORTS,
