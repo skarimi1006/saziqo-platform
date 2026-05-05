@@ -1,6 +1,6 @@
 import { HttpException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { AgentsListingStatus } from '@prisma/client';
+import { AgentsListingStatus, AgentsPricingType, AgentsPurchaseStatus } from '@prisma/client';
 
 import { ErrorCode } from '../../../common/types/response.types';
 import { AuditService } from '../../../core/audit/audit.service';
@@ -37,6 +37,9 @@ describe('ListingsService', () => {
   let agentsListingFindFirst: jest.Mock;
   let agentsListingUpdate: jest.Mock;
   let userRoleFindMany: jest.Mock;
+  let agentsPurchaseFindFirst: jest.Mock;
+  let agentsUserRunsFindUnique: jest.Mock;
+  let agentsReviewGroupBy: jest.Mock;
   let dispatch: jest.Mock;
   let auditLog: jest.Mock;
 
@@ -75,6 +78,10 @@ describe('ListingsService', () => {
       userRole: { findMany: userRoleFindMany },
     };
 
+    agentsPurchaseFindFirst = jest.fn(async () => null);
+    agentsUserRunsFindUnique = jest.fn(async () => null);
+    agentsReviewGroupBy = jest.fn(async () => []);
+
     const prisma = {
       $transaction: jest.fn(async (cb: (tx: MockTx) => unknown) => cb(tx)),
       agents_listing: {
@@ -88,7 +95,10 @@ describe('ListingsService', () => {
       },
       agents_review: {
         aggregate: jest.fn(async () => ({ _avg: { rating: 4.5 }, _count: { _all: 2 } })),
+        groupBy: agentsReviewGroupBy,
       },
+      agents_purchase: { findFirst: agentsPurchaseFindFirst },
+      agents_user_runs: { findUnique: agentsUserRunsFindUnique },
     };
 
     dispatch = jest.fn(async () => ({ dispatched: ['IN_APP'], failures: [] }));
@@ -525,6 +535,81 @@ describe('ListingsService', () => {
           payload: expect.objectContaining({ softDeleted: true }),
         }),
       );
+    });
+  });
+
+  // ─── Phase 2C helpers ────────────────────────────────────────────
+
+  describe('computeOwnership', () => {
+    const userId = 200n;
+
+    it('returns owns=false when no completed purchase exists', async () => {
+      agentsPurchaseFindFirst.mockResolvedValueOnce(null);
+      const result = await service.computeOwnership(listingId, userId, AgentsPricingType.ONE_TIME);
+      expect(result).toEqual({ owns: false, runsRemaining: null });
+      expect(agentsPurchaseFindFirst).toHaveBeenCalledWith({
+        where: { userId, listingId, status: AgentsPurchaseStatus.COMPLETED },
+        select: { id: true },
+      });
+    });
+
+    it('returns owns=true when a completed purchase exists', async () => {
+      agentsPurchaseFindFirst.mockResolvedValueOnce({ id: 99n });
+      const result = await service.computeOwnership(listingId, userId, AgentsPricingType.ONE_TIME);
+      expect(result.owns).toBe(true);
+      // ONE_TIME → runsRemaining stays null
+      expect(result.runsRemaining).toBeNull();
+    });
+
+    it('does not query agents_user_runs for non-PER_RUN listings', async () => {
+      agentsPurchaseFindFirst.mockResolvedValueOnce({ id: 99n });
+      await service.computeOwnership(listingId, userId, AgentsPricingType.FREE);
+      expect(agentsUserRunsFindUnique).not.toHaveBeenCalled();
+    });
+
+    it('returns runsRemaining from agents_user_runs for PER_RUN listings', async () => {
+      agentsPurchaseFindFirst.mockResolvedValueOnce({ id: 99n });
+      agentsUserRunsFindUnique.mockResolvedValueOnce({ remainingRuns: 7n });
+      const result = await service.computeOwnership(listingId, userId, AgentsPricingType.PER_RUN);
+      expect(result).toEqual({ owns: true, runsRemaining: 7 });
+      expect(agentsUserRunsFindUnique).toHaveBeenCalledWith({
+        where: { userId_listingId: { userId, listingId } },
+        select: { remainingRuns: true },
+      });
+    });
+
+    it('returns runsRemaining=0 for PER_RUN listings with no user_runs row', async () => {
+      agentsPurchaseFindFirst.mockResolvedValueOnce(null);
+      agentsUserRunsFindUnique.mockResolvedValueOnce(null);
+      const result = await service.computeOwnership(listingId, userId, AgentsPricingType.PER_RUN);
+      expect(result).toEqual({ owns: false, runsRemaining: 0 });
+    });
+  });
+
+  describe('computeRatingDistribution', () => {
+    it('returns zeros for every rating bucket when no reviews exist', async () => {
+      agentsReviewGroupBy.mockResolvedValueOnce([]);
+      const dist = await service.computeRatingDistribution(listingId);
+      expect(dist).toEqual({ '1': 0, '2': 0, '3': 0, '4': 0, '5': 0 });
+    });
+
+    it('maps groupBy rows into the rating-keyed distribution', async () => {
+      agentsReviewGroupBy.mockResolvedValueOnce([
+        { rating: 5, _count: { _all: 3 } },
+        { rating: 4, _count: { _all: 2 } },
+        { rating: 1, _count: { _all: 1 } },
+      ]);
+      const dist = await service.computeRatingDistribution(listingId);
+      expect(dist).toEqual({ '1': 1, '2': 0, '3': 0, '4': 2, '5': 3 });
+    });
+
+    it('queries with isHidden:false to exclude moderated reviews', async () => {
+      await service.computeRatingDistribution(listingId);
+      expect(agentsReviewGroupBy).toHaveBeenCalledWith({
+        by: ['rating'],
+        where: { listingId, isHidden: false },
+        _count: { _all: true },
+      });
     });
   });
 });

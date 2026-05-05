@@ -2,6 +2,7 @@ import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import {
   AgentsListingStatus,
   AgentsPricingType,
+  AgentsPurchaseStatus,
   Prisma,
   type agents_listing,
 } from '@prisma/client';
@@ -12,6 +13,13 @@ import { NotificationsService } from '../../../core/notifications/notifications.
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { AGENTS_AUDIT_ACTIONS } from '../contract';
 import type { ListingWithCardIncludes } from '../dto/listing-card.dto';
+import {
+  type ListingDetailDto,
+  type ListingDetailOwnership,
+  type ListingWithDetailIncludes,
+  type RatingDistribution,
+  listingToDetailDto,
+} from '../dto/listing-detail.dto';
 import type { AgentsPricingTypeName } from '../types';
 
 // CLAUDE: Status transitions are encoded per-method, not as a flat matrix:
@@ -166,6 +174,97 @@ export class ListingsService {
       nextCursor,
       hasMore,
     };
+  }
+
+  async findDetailBySlug(slug: string, currentUserId?: bigint): Promise<ListingDetailDto | null> {
+    const listing = await this.prisma.agents_listing.findFirst({
+      where: { slug, status: AgentsListingStatus.PUBLISHED, deletedAt: null },
+      include: {
+        category: { select: { id: true, nameFa: true, slug: true } },
+        maker: { select: { id: true, createdAt: true } },
+        screenshots: {
+          orderBy: { order: 'asc' },
+          include: { file: { select: { id: true } } },
+        },
+        runPacks: {
+          where: { isActive: true },
+          orderBy: { order: 'asc' },
+        },
+        reviews: {
+          where: { isHidden: false },
+          orderBy: { createdAt: 'desc' },
+          take: 10,
+          include: { author: { select: { id: true } } },
+        },
+      },
+    });
+
+    if (!listing) return null;
+
+    // Run the four supplemental queries in parallel: review count, rating
+    // distribution, maker's published-listings count, and ownership.
+    const [reviewCount, ratingDistribution, makerListingsCount, ownership] = await Promise.all([
+      this.prisma.agents_review.count({
+        where: { listingId: listing.id, isHidden: false },
+      }),
+      this.computeRatingDistribution(listing.id),
+      this.prisma.agents_listing.count({
+        where: {
+          makerUserId: listing.makerUserId,
+          status: AgentsListingStatus.PUBLISHED,
+          deletedAt: null,
+        },
+      }),
+      currentUserId !== undefined
+        ? this.computeOwnership(listing.id, currentUserId, listing.pricingType)
+        : Promise.resolve(null),
+    ]);
+
+    return listingToDetailDto(listing as unknown as ListingWithDetailIncludes, {
+      reviewCount,
+      ratingDistribution,
+      makerListingsCount,
+      ownership,
+    });
+  }
+
+  async computeOwnership(
+    listingId: bigint,
+    userId: bigint,
+    pricingType: AgentsPricingType,
+  ): Promise<ListingDetailOwnership> {
+    const purchase = await this.prisma.agents_purchase.findFirst({
+      where: { userId, listingId, status: AgentsPurchaseStatus.COMPLETED },
+      select: { id: true },
+    });
+    const owns = purchase !== null;
+
+    let runsRemaining: number | null = null;
+    if (pricingType === AgentsPricingType.PER_RUN) {
+      const runs = await this.prisma.agents_user_runs.findUnique({
+        where: { userId_listingId: { userId, listingId } },
+        select: { remainingRuns: true },
+      });
+      runsRemaining = runs ? Number(runs.remainingRuns) : 0;
+    }
+
+    return { owns, runsRemaining };
+  }
+
+  async computeRatingDistribution(listingId: bigint): Promise<RatingDistribution> {
+    const rows = await this.prisma.agents_review.groupBy({
+      by: ['rating'],
+      where: { listingId, isHidden: false },
+      _count: { _all: true },
+    });
+    const dist: RatingDistribution = { '1': 0, '2': 0, '3': 0, '4': 0, '5': 0 };
+    for (const row of rows) {
+      const key = String(row.rating);
+      if (key === '1' || key === '2' || key === '3' || key === '4' || key === '5') {
+        dist[key] = row._count._all;
+      }
+    }
+    return dist;
   }
 
   // ─── Create ────────────────────────────────────────────────────────────

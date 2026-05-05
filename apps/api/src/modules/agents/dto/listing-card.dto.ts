@@ -1,18 +1,6 @@
 import type { AgentsPricingType, agents_listing } from '@prisma/client';
 
-const BASE62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
-
-function base62Encode(n: bigint): string {
-  if (n === 0n) return '0';
-  let result = '';
-  const base = 62n;
-  let num = n;
-  while (num > 0n) {
-    result = BASE62[Number(num % base)] + result;
-    num = num / base;
-  }
-  return result;
-}
+import { makerHandle } from './handles';
 
 export interface ListingCardDto {
   id: string;
@@ -62,7 +50,7 @@ export function listingToCardDto(listing: ListingWithCardIncludes): ListingCardD
     shortDescFa: listing.shortDescFa,
     categoryId: listing.categoryId.toString(),
     categoryNameFa: listing.category.nameFa,
-    makerHandle: 'm' + base62Encode(listing.makerUserId),
+    makerHandle: makerHandle(listing.makerUserId),
     pricingType: listing.pricingType,
     oneTimePriceToman: listing.oneTimePriceToman?.toString() ?? null,
     ratingAverage: listing.ratingAverage?.toString() ?? null,
