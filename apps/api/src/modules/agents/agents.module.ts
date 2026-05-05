@@ -6,6 +6,7 @@ import { NotificationsModule } from '../../core/notifications/notifications.modu
 import { AgentsCartController } from './controllers/cart.controller';
 import { CatalogController } from './controllers/catalog.controller';
 import { CategoriesController } from './controllers/categories.controller';
+import { AgentsCheckoutController } from './controllers/checkout.controller';
 import { ListingsController } from './controllers/listings.controller';
 import { SearchController } from './controllers/search.controller';
 import { SectionsController } from './controllers/sections.controller';
@@ -13,6 +14,7 @@ import { AgentsCartAdapterService } from './services/cart-adapter.service';
 import { CartService } from './services/cart.service';
 import { CategoriesBootstrapService } from './services/categories.bootstrap';
 import { CategoriesService } from './services/categories.service';
+import { CheckoutService } from './services/checkout.service';
 import { ListingsService } from './services/listings.service';
 import { SettingsBootstrapService } from './services/settings.bootstrap';
 
@@ -20,6 +22,7 @@ import { SettingsBootstrapService } from './services/settings.bootstrap';
   imports: [NotificationsModule],
   controllers: [
     AgentsCartController,
+    AgentsCheckoutController,
     CatalogController,
     CategoriesController,
     ListingsController,
@@ -32,9 +35,10 @@ import { SettingsBootstrapService } from './services/settings.bootstrap';
     AgentsCartAdapterService,
     CartService,
     CategoriesService,
+    CheckoutService,
     ListingsService,
     OptionalJwtAuthGuard,
   ],
-  exports: [ListingsService, CategoriesService, CartService],
+  exports: [ListingsService, CategoriesService, CartService, CheckoutService],
 })
 export class AgentsModule {}
