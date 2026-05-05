@@ -10,6 +10,7 @@ import { AgentsCheckoutController } from './controllers/checkout.controller';
 import { AgentsDownloadController } from './controllers/download.controller';
 import { AgentsLibraryController } from './controllers/library.controller';
 import { ListingsController } from './controllers/listings.controller';
+import { MakerListingsController } from './controllers/maker-listings.controller';
 import { AgentsReviewsController } from './controllers/reviews.controller';
 import { AgentsRunsController } from './controllers/runs.controller';
 import { SearchController } from './controllers/search.controller';
@@ -38,6 +39,7 @@ import { SettingsBootstrapService } from './services/settings.bootstrap';
     CatalogController,
     CategoriesController,
     ListingsController,
+    MakerListingsController,
     SearchController,
     SectionsController,
   ],

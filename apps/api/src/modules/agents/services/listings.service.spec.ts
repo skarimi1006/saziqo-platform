@@ -7,6 +7,7 @@ import { AuditService } from '../../../core/audit/audit.service';
 import { NotificationsService } from '../../../core/notifications/notifications.service';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { RedisService } from '../../../core/redis/redis.service';
+import { MAKER_LISTINGS_QUOTA } from '../constants';
 import { AGENTS_AUDIT_ACTIONS } from '../contract';
 
 import { CategoriesService } from './categories.service';
@@ -38,6 +39,10 @@ describe('ListingsService', () => {
   let agentsListingFindUnique: jest.Mock;
   let agentsListingFindFirst: jest.Mock;
   let agentsListingUpdate: jest.Mock;
+  let txAgentsListingFindFirst: jest.Mock;
+  let txAgentsListingCount: jest.Mock;
+  let txAgentsListingCreate: jest.Mock;
+  let txAgentsRunPackCreateMany: jest.Mock;
   let userRoleFindMany: jest.Mock;
   let agentsPurchaseFindFirst: jest.Mock;
   let agentsUserRunsFindUnique: jest.Mock;
@@ -70,13 +75,38 @@ describe('ListingsService', () => {
 
     interface MockTx {
       $queryRaw: jest.Mock;
-      agents_listing: { findUnique: jest.Mock; update: jest.Mock };
+      agents_listing: {
+        findUnique: jest.Mock;
+        update: jest.Mock;
+        findFirst: jest.Mock;
+        count: jest.Mock;
+        create: jest.Mock;
+      };
+      agents_run_pack: { createMany: jest.Mock; count: jest.Mock };
       userRole: { findMany: jest.Mock };
     }
 
+    txAgentsListingFindFirst = jest.fn(async () => null);
+    txAgentsListingCount = jest.fn(async () => 0);
+    txAgentsListingCreate = jest.fn(async ({ data }: { data: Record<string, unknown> }) => ({
+      id: 42n,
+      ...data,
+    }));
+    txAgentsRunPackCreateMany = jest.fn(async () => ({ count: 0 }));
+
     const tx: MockTx = {
       $queryRaw: queryRawMock,
-      agents_listing: { findUnique: agentsListingFindUnique, update: agentsListingUpdate },
+      agents_listing: {
+        findUnique: agentsListingFindUnique,
+        update: agentsListingUpdate,
+        findFirst: txAgentsListingFindFirst,
+        count: txAgentsListingCount,
+        create: txAgentsListingCreate,
+      },
+      agents_run_pack: {
+        createMany: txAgentsRunPackCreateMany,
+        count: jest.fn(async () => 0),
+      },
       userRole: { findMany: userRoleFindMany },
     };
 
@@ -550,6 +580,203 @@ describe('ListingsService', () => {
           payload: expect.objectContaining({ softDeleted: true }),
         }),
       );
+    });
+  });
+
+  // ─── Phase 4A: create ────────────────────────────────────────────
+
+  describe('create', () => {
+    const baseDto = {
+      slug: 'persian-copywriter',
+      titleFa: 'نویسنده محتوای فارسی',
+      shortDescFa: 'یک ایجنت نمونه برای تولید متن فارسی روان و کاربرپسند.',
+      longDescFaMd:
+        'این ایجنت با استفاده از مدل‌های زبانی متن‌های بازاریابی، وبلاگ، و شبکه‌های اجتماعی تولید می‌کند. ' +
+        'برای استفاده، فقط کافی است موضوع و سبک نوشتاری مورد نظر خود را وارد کنید تا خروجی به فارسی روان آماده شود.',
+      categoryId: 1n,
+    };
+
+    const expectError = async (
+      code: ErrorCode,
+      fn: () => Promise<unknown>,
+    ): Promise<HttpException> => {
+      try {
+        await fn();
+        throw new Error(`expected ${code} to be thrown but call resolved`);
+      } catch (err) {
+        expect(err).toBeInstanceOf(HttpException);
+        expect((err as HttpException).getResponse()).toMatchObject({ code });
+        return err as HttpException;
+      }
+    };
+
+    it('FREE: creates DRAFT listing with no packs and no oneTimePrice', async () => {
+      const result = await service.create({
+        makerUserId: makerId,
+        dto: { ...baseDto, pricingType: 'FREE' },
+      });
+
+      expect(result.status).toBe(AgentsListingStatus.DRAFT);
+      expect(txAgentsListingCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            makerUserId: makerId,
+            slug: 'persian-copywriter',
+            pricingType: 'FREE',
+            status: AgentsListingStatus.DRAFT,
+            oneTimePriceToman: null,
+          }),
+        }),
+      );
+      expect(txAgentsRunPackCreateMany).not.toHaveBeenCalled();
+    });
+
+    it('ONE_TIME: requires oneTimePriceToman > 0', async () => {
+      await service.create({
+        makerUserId: makerId,
+        dto: { ...baseDto, pricingType: 'ONE_TIME', oneTimePriceToman: 50_000n },
+      });
+      expect(txAgentsListingCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ oneTimePriceToman: 50_000n }),
+        }),
+      );
+    });
+
+    it('PER_RUN: creates packs in the same transaction', async () => {
+      await service.create({
+        makerUserId: makerId,
+        dto: {
+          ...baseDto,
+          pricingType: 'PER_RUN',
+          runPacks: [
+            { nameFa: 'بسته شروع', runs: 10n, priceToman: 30_000n },
+            { nameFa: 'بسته حرفه‌ای', runs: 50n, priceToman: 120_000n },
+          ],
+        },
+      });
+      expect(txAgentsRunPackCreateMany).toHaveBeenCalledTimes(1);
+      const call = txAgentsRunPackCreateMany.mock.calls[0][0] as {
+        data: Array<Record<string, unknown>>;
+      };
+      expect(call.data).toHaveLength(2);
+      expect(call.data[0]).toMatchObject({ nameFa: 'بسته شروع', runs: 10n, order: 0 });
+      expect(call.data[1]).toMatchObject({ order: 1 });
+    });
+
+    it('lowercases slug before checking and persisting', async () => {
+      await service.create({
+        makerUserId: makerId,
+        dto: { ...baseDto, slug: 'Persian-Copywriter', pricingType: 'FREE' },
+      });
+      expect(txAgentsListingFindFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            slug: { equals: 'persian-copywriter', mode: 'insensitive' },
+          }),
+        }),
+      );
+      expect(txAgentsListingCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ slug: 'persian-copywriter' }),
+        }),
+      );
+    });
+
+    it('throws SLUG_TAKEN when an active listing already owns the slug', async () => {
+      txAgentsListingFindFirst.mockResolvedValueOnce({ id: 99n });
+      const err = await expectError(ErrorCode.SLUG_TAKEN, () =>
+        service.create({
+          makerUserId: makerId,
+          dto: { ...baseDto, pricingType: 'FREE' },
+        }),
+      );
+      expect(err.getStatus()).toBe(409);
+      expect(txAgentsListingCreate).not.toHaveBeenCalled();
+    });
+
+    it('throws MAKER_QUOTA_EXCEEDED at the limit', async () => {
+      txAgentsListingCount.mockResolvedValueOnce(MAKER_LISTINGS_QUOTA);
+      const err = await expectError(ErrorCode.MAKER_QUOTA_EXCEEDED, () =>
+        service.create({
+          makerUserId: makerId,
+          dto: { ...baseDto, pricingType: 'FREE' },
+        }),
+      );
+      expect(err.getStatus()).toBe(409);
+      expect(txAgentsListingCreate).not.toHaveBeenCalled();
+    });
+
+    describe('INVALID_PACKS', () => {
+      it('PER_RUN with 0 packs', async () => {
+        await expectError(ErrorCode.INVALID_PACKS, () =>
+          service.create({
+            makerUserId: makerId,
+            dto: { ...baseDto, pricingType: 'PER_RUN', runPacks: [] },
+          }),
+        );
+      });
+
+      it('PER_RUN with > 5 packs', async () => {
+        await expectError(ErrorCode.INVALID_PACKS, () =>
+          service.create({
+            makerUserId: makerId,
+            dto: {
+              ...baseDto,
+              pricingType: 'PER_RUN',
+              runPacks: Array.from({ length: 6 }, (_, i) => ({
+                nameFa: `بسته ${i}`,
+                runs: 10n,
+                priceToman: 1_000n,
+              })),
+            },
+          }),
+        );
+      });
+
+      it('PER_RUN with a pack of runs = 0', async () => {
+        await expectError(ErrorCode.INVALID_PACKS, () =>
+          service.create({
+            makerUserId: makerId,
+            dto: {
+              ...baseDto,
+              pricingType: 'PER_RUN',
+              runPacks: [{ nameFa: 'صفر', runs: 0n, priceToman: 1_000n }],
+            },
+          }),
+        );
+      });
+
+      it('PER_RUN with a pack of priceToman = 0', async () => {
+        await expectError(ErrorCode.INVALID_PACKS, () =>
+          service.create({
+            makerUserId: makerId,
+            dto: {
+              ...baseDto,
+              pricingType: 'PER_RUN',
+              runPacks: [{ nameFa: 'رایگان', runs: 10n, priceToman: 0n }],
+            },
+          }),
+        );
+      });
+
+      it('ONE_TIME without oneTimePriceToman', async () => {
+        await expectError(ErrorCode.INVALID_PACKS, () =>
+          service.create({
+            makerUserId: makerId,
+            dto: { ...baseDto, pricingType: 'ONE_TIME' },
+          }),
+        );
+      });
+
+      it('FREE with oneTimePriceToman set', async () => {
+        await expectError(ErrorCode.INVALID_PACKS, () =>
+          service.create({
+            makerUserId: makerId,
+            dto: { ...baseDto, pricingType: 'FREE', oneTimePriceToman: 1_000n },
+          }),
+        );
+      });
     });
   });
 

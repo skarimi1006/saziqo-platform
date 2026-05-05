@@ -2,6 +2,15 @@ export const AGENTS_MODULE_NAME = 'agents';
 export const AGENTS_MODULE_PERSIAN_NAME = 'بازارگاه ایجنت‌ها';
 export const AGENTS_MODULE_VERSION = '0.1.0';
 
+// Maximum number of active (non-deleted) listings a single maker may own.
+// Active = any status (DRAFT through SUSPENDED) with deletedAt = null.
+// Plan §"Phase 4A" earmarks this for migration into agents_settings later;
+// hardcoded here for v1 to keep Phase 4A schema-additive-free.
+export const MAKER_LISTINGS_QUOTA = 50;
+// Lower/upper bounds for run-pack array on a PER_RUN listing.
+export const RUN_PACKS_MIN = 1;
+export const RUN_PACKS_MAX = 5;
+
 export const DEFAULT_CATEGORIES = [
   { slug: 'research', nameFa: 'پژوهش', iconKey: 'flask', colorToken: 'lavender', order: 10 },
   { slug: 'business', nameFa: 'کسب و کار', iconKey: 'briefcase', colorToken: 'mint', order: 20 },

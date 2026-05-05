@@ -12,6 +12,7 @@ import { AuditService } from '../../../core/audit/audit.service';
 import { NotificationsService } from '../../../core/notifications/notifications.service';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { RedisService } from '../../../core/redis/redis.service';
+import { MAKER_LISTINGS_QUOTA, RUN_PACKS_MAX, RUN_PACKS_MIN } from '../constants';
 import { AGENTS_AUDIT_ACTIONS } from '../contract';
 import { makerHandle } from '../dto/handles';
 import {
@@ -60,6 +61,12 @@ export interface AuditContext {
   userAgent?: string | null;
 }
 
+export interface CreateRunPackInput {
+  nameFa: string;
+  runs: bigint;
+  priceToman: bigint;
+}
+
 export interface CreateListingInput {
   slug: string;
   titleFa: string;
@@ -70,6 +77,7 @@ export interface CreateListingInput {
   oneTimePriceToman?: bigint | null;
   installInstructionsFaMd?: string | null;
   bundleFileId?: bigint | null;
+  runPacks?: CreateRunPackInput[];
 }
 
 export interface FindPublishedFilters {
@@ -543,22 +551,142 @@ export class ListingsService {
 
   // ─── Create ────────────────────────────────────────────────────────────
 
+  // Validates and creates a DRAFT listing plus run packs (PER_RUN) inside
+  // one transaction so a partial listing can never escape on rollback.
+  // Throws SLUG_TAKEN, INVALID_PACKS, or MAKER_QUOTA_EXCEEDED with
+  // appropriate HTTP status codes.
   async create(input: { makerUserId: bigint; dto: CreateListingInput }): Promise<agents_listing> {
-    return this.prisma.agents_listing.create({
-      data: {
-        makerUserId: input.makerUserId,
-        slug: input.dto.slug,
-        titleFa: input.dto.titleFa,
-        shortDescFa: input.dto.shortDescFa,
-        longDescFaMd: input.dto.longDescFaMd,
-        installInstructionsFaMd: input.dto.installInstructionsFaMd ?? null,
-        categoryId: input.dto.categoryId,
-        pricingType: input.dto.pricingType,
-        oneTimePriceToman: input.dto.oneTimePriceToman ?? null,
-        bundleFileId: input.dto.bundleFileId ?? null,
-        status: AgentsListingStatus.DRAFT,
-      },
+    const { makerUserId, dto } = input;
+    this.assertPricingShape(dto);
+
+    return this.prisma.$transaction(async (tx) => {
+      const slugLower = dto.slug.toLowerCase();
+      const slugClash = await tx.agents_listing.findFirst({
+        where: { slug: { equals: slugLower, mode: 'insensitive' }, deletedAt: null },
+        select: { id: true },
+      });
+      if (slugClash !== null) {
+        throw httpError(ErrorCode.SLUG_TAKEN, 'Slug already in use', HttpStatus.CONFLICT);
+      }
+
+      const activeCount = await tx.agents_listing.count({
+        where: { makerUserId, deletedAt: null },
+      });
+      if (activeCount >= MAKER_LISTINGS_QUOTA) {
+        throw httpError(
+          ErrorCode.MAKER_QUOTA_EXCEEDED,
+          `Maker quota of ${MAKER_LISTINGS_QUOTA} active listings exceeded`,
+          HttpStatus.CONFLICT,
+        );
+      }
+
+      const listing = await tx.agents_listing.create({
+        data: {
+          makerUserId,
+          slug: slugLower,
+          titleFa: dto.titleFa,
+          shortDescFa: dto.shortDescFa,
+          longDescFaMd: dto.longDescFaMd,
+          installInstructionsFaMd: dto.installInstructionsFaMd ?? null,
+          categoryId: dto.categoryId,
+          pricingType: dto.pricingType,
+          oneTimePriceToman: dto.oneTimePriceToman ?? null,
+          bundleFileId: dto.bundleFileId ?? null,
+          status: AgentsListingStatus.DRAFT,
+        },
+      });
+
+      if (dto.pricingType === 'PER_RUN' && dto.runPacks) {
+        await tx.agents_run_pack.createMany({
+          data: dto.runPacks.map((pack, index) => ({
+            listingId: listing.id,
+            nameFa: pack.nameFa,
+            runs: pack.runs,
+            priceToman: pack.priceToman,
+            order: index,
+            isActive: true,
+          })),
+        });
+      }
+
+      return listing;
     });
+  }
+
+  // CLAUDE: Pricing-shape validator. Pure function over the DTO — no DB
+  // access. Called by create() before opening the transaction so a bad
+  // payload short-circuits without ever hitting Postgres. The contract:
+  //   FREE     → no pricing fields required; runPacks and oneTimePriceToman
+  //              must NOT be set
+  //   ONE_TIME → oneTimePriceToman > 0; no runPacks
+  //   PER_RUN  → 1..5 runPacks, each with runs > 0 and priceToman > 0;
+  //              oneTimePriceToman must NOT be set
+  private assertPricingShape(dto: CreateListingInput): void {
+    if (dto.pricingType === 'PER_RUN') {
+      const packs = dto.runPacks ?? [];
+      if (packs.length < RUN_PACKS_MIN || packs.length > RUN_PACKS_MAX) {
+        throw httpError(
+          ErrorCode.INVALID_PACKS,
+          `PER_RUN listings require ${RUN_PACKS_MIN}-${RUN_PACKS_MAX} run packs`,
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+      for (const pack of packs) {
+        if (pack.runs <= 0n || pack.priceToman <= 0n) {
+          throw httpError(
+            ErrorCode.INVALID_PACKS,
+            'Each run pack requires runs > 0 and priceToman > 0',
+            HttpStatus.BAD_REQUEST,
+          );
+        }
+      }
+      if (dto.oneTimePriceToman !== undefined && dto.oneTimePriceToman !== null) {
+        throw httpError(
+          ErrorCode.INVALID_PACKS,
+          'oneTimePriceToman is not allowed on PER_RUN listings',
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+      return;
+    }
+
+    if (dto.pricingType === 'ONE_TIME') {
+      if (
+        dto.oneTimePriceToman === undefined ||
+        dto.oneTimePriceToman === null ||
+        dto.oneTimePriceToman <= 0n
+      ) {
+        throw httpError(
+          ErrorCode.INVALID_PACKS,
+          'ONE_TIME listings require oneTimePriceToman > 0',
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+      if (dto.runPacks !== undefined && dto.runPacks.length > 0) {
+        throw httpError(
+          ErrorCode.INVALID_PACKS,
+          'runPacks are not allowed on ONE_TIME listings',
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+      return;
+    }
+
+    // FREE
+    if (dto.oneTimePriceToman !== undefined && dto.oneTimePriceToman !== null) {
+      throw httpError(
+        ErrorCode.INVALID_PACKS,
+        'oneTimePriceToman is not allowed on FREE listings',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    if (dto.runPacks !== undefined && dto.runPacks.length > 0) {
+      throw httpError(
+        ErrorCode.INVALID_PACKS,
+        'runPacks are not allowed on FREE listings',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
   }
 
   // ─── Status transitions ────────────────────────────────────────────────
@@ -579,6 +707,12 @@ export class ListingsService {
         ALLOWED_FROM.submitForReview,
         AgentsListingStatus.PENDING_REVIEW,
       );
+
+      // Re-validate pricing setup at submission. The draft path also runs
+      // assertPricingShape, but a maker may have flipped the listing's
+      // pricingType after creation or removed packs through 4C — admins
+      // should never see a PER_RUN listing with zero active packs.
+      await this.assertSubmissionReady(tx, current);
 
       const next = await tx.agents_listing.update({
         where: { id },
@@ -881,6 +1015,35 @@ export class ListingsService {
     });
     return Array.from(new Set(rows.map((r) => r.userId)));
   }
+
+  // Re-checks that a listing is structurally complete enough to be
+  // queued for admin review. Mirrors the create-time pricing-shape rules
+  // but reads back from the DB so packs added/removed via Phase 4C are
+  // counted.
+  private async assertSubmissionReady(tx: Tx, listing: agents_listing): Promise<void> {
+    if (listing.pricingType === AgentsPricingType.PER_RUN) {
+      const activePacks = await tx.agents_run_pack.count({
+        where: { listingId: listing.id, isActive: true },
+      });
+      if (activePacks < RUN_PACKS_MIN || activePacks > RUN_PACKS_MAX) {
+        throw httpError(
+          ErrorCode.INVALID_PACKS,
+          `PER_RUN listings require ${RUN_PACKS_MIN}-${RUN_PACKS_MAX} active run packs at submission`,
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+      return;
+    }
+    if (listing.pricingType === AgentsPricingType.ONE_TIME) {
+      if (listing.oneTimePriceToman === null || listing.oneTimePriceToman <= 0n) {
+        throw httpError(
+          ErrorCode.INVALID_PACKS,
+          'ONE_TIME listings require oneTimePriceToman > 0 at submission',
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+    }
+  }
 }
 
 function listingNotFound(): HttpException {
@@ -888,4 +1051,8 @@ function listingNotFound(): HttpException {
     { code: ErrorCode.LISTING_NOT_FOUND, message: 'Listing not found' },
     HttpStatus.NOT_FOUND,
   );
+}
+
+function httpError(code: ErrorCode, message: string, status: HttpStatus): HttpException {
+  return new HttpException({ code, message }, status);
 }
