@@ -96,3 +96,59 @@ DELETE FROM agents_run_event WHERE id = 1;
 UPDATE agents_purchase SET status = 'REFUNDED' WHERE id = 1;
 -- → succeeds (intentional)
 ```
+
+## Full-text search & trigram indexes (Phase 1E)
+
+The `agents_listing.searchVector` column (`tsvector`) is populated by the
+`agents_listing_tsv_update` trigger on every INSERT and on UPDATE of
+`titleFa`, `shortDescFa`, `longDescFaMd`, or `slug`. Persian has no
+Postgres FTS dictionary, so the `simple` regconfig is used (raw lexemes,
+no stemming) with weighted ranking:
+
+| Weight | Source field                           |
+| ------ | -------------------------------------- |
+| A      | `titleFa`, `slug`                      |
+| B      | `shortDescFa`                          |
+| C      | `LEFT(longDescFaMd, 4000)` (truncated) |
+
+Two index types support search:
+
+- `agents_listing_search_vector_idx` — GIN on `searchVector` for
+  `@@ plainto_tsquery('simple', q)` matches.
+- `agents_listing_{title,slug,shortdesc}_trgm_idx` — GIN with
+  `gin_trgm_ops` for ILIKE substring fallback when FTS returns < 10 rows.
+
+### Verification queries
+
+```sql
+-- 1. Confirm extension + trigger are present
+SELECT extname FROM pg_extension WHERE extname = 'pg_trgm';
+\dft agents_listing_search_vector_update
+\d+ agents_listing  -- check Triggers and Indexes sections
+
+-- 2. Insert a row; the trigger populates searchVector
+INSERT INTO agents_listing (
+  slug, "titleFa", "shortDescFa", "longDescFaMd",
+  "categoryId", "makerUserId", "pricingType", status, "updatedAt"
+) VALUES (
+  'fts-test', 'تست جستجو', 'یک ایجنت نمونه', 'متن کامل',
+  (SELECT id FROM agents_category WHERE slug = 'research'),
+  (SELECT id FROM users LIMIT 1),
+  'FREE', 'DRAFT', NOW()
+);
+SELECT slug, "searchVector" IS NOT NULL AS populated
+FROM agents_listing WHERE slug = 'fts-test';
+
+-- 3. FTS query with rank
+SELECT id, slug, ts_rank("searchVector", plainto_tsquery('simple', 'تست')) AS rank
+FROM agents_listing
+WHERE "searchVector" @@ plainto_tsquery('simple', 'تست')
+ORDER BY rank DESC;
+
+-- 4. Trigram fallback (ILIKE) — verify index use
+EXPLAIN SELECT id FROM agents_listing WHERE "titleFa" ILIKE '%تست%';
+-- → expect "Bitmap Index Scan on agents_listing_title_trgm_idx"
+
+-- 5. Cleanup
+DELETE FROM agents_listing WHERE slug = 'fts-test';
+```
