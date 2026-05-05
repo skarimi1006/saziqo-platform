@@ -11,8 +11,14 @@ import { ErrorCode } from '../../../common/types/response.types';
 import { AuditService } from '../../../core/audit/audit.service';
 import { NotificationsService } from '../../../core/notifications/notifications.service';
 import { PrismaService } from '../../../core/prisma/prisma.service';
+import { RedisService } from '../../../core/redis/redis.service';
 import { AGENTS_AUDIT_ACTIONS } from '../contract';
-import type { ListingWithCardIncludes } from '../dto/listing-card.dto';
+import { makerHandle } from '../dto/handles';
+import {
+  type ListingCardDto,
+  type ListingWithCardIncludes,
+  listingToCardDto,
+} from '../dto/listing-card.dto';
 import {
   type ListingDetailDto,
   type ListingDetailOwnership,
@@ -20,7 +26,16 @@ import {
   type RatingDistribution,
   listingToDetailDto,
 } from '../dto/listing-detail.dto';
+import type { RecentActivityItem } from '../dto/section.dto';
 import type { AgentsPricingTypeName } from '../types';
+
+// CLAUDE: Stable Redis key names for each homepage section cache (60s TTL).
+const SECTION_KEYS = {
+  featured: 'agents:section:featured',
+  bestSellers: 'agents:section:best-sellers',
+  newReleases: 'agents:section:new-releases',
+  recentActivity: 'agents:section:recent-activity',
+} as const;
 
 // CLAUDE: Status transitions are encoded per-method, not as a flat matrix:
 // the same edge (e.g. PUBLISHED → PENDING_REVIEW) belongs to a different
@@ -85,6 +100,7 @@ export class ListingsService {
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
     private readonly audit: AuditService,
+    private readonly redis: RedisService,
   ) {}
 
   // ─── Read methods ──────────────────────────────────────────────────────
@@ -267,6 +283,137 @@ export class ListingsService {
     return dist;
   }
 
+  // ─── Homepage sections (cached) ───────────────────────────────────────
+
+  async findFeatured(): Promise<ListingCardDto[]> {
+    return this.getCachedSection(SECTION_KEYS.featured, async () => {
+      const settings = await this.prisma.agents_settings.findUnique({ where: { id: 1n } });
+      const limit = settings?.featuredItemCount ?? 6;
+      const rows = await this.prisma.agents_listing.findMany({
+        where: { isFeatured: true, status: AgentsListingStatus.PUBLISHED, deletedAt: null },
+        orderBy: [{ featuredOrder: { sort: 'asc', nulls: 'last' } }, { id: 'asc' }],
+        take: limit,
+        include: {
+          category: { select: { nameFa: true } },
+          screenshots: {
+            take: 1,
+            orderBy: { order: 'asc' },
+            include: { file: { select: { id: true } } },
+          },
+        },
+      });
+      return (rows as unknown as ListingWithCardIncludes[]).map(listingToCardDto);
+    });
+  }
+
+  async findBestSellers(): Promise<ListingCardDto[]> {
+    return this.getCachedSection(SECTION_KEYS.bestSellers, async () => {
+      const settings = await this.prisma.agents_settings.findUnique({ where: { id: 1n } });
+      const limit = settings?.bestSellersItemCount ?? 8;
+      const rows = await this.prisma.agents_listing.findMany({
+        where: { status: AgentsListingStatus.PUBLISHED, deletedAt: null },
+        orderBy: [{ totalUsers: 'desc' }, { id: 'desc' }],
+        take: limit,
+        include: {
+          category: { select: { nameFa: true } },
+          screenshots: {
+            take: 1,
+            orderBy: { order: 'asc' },
+            include: { file: { select: { id: true } } },
+          },
+        },
+      });
+      return (rows as unknown as ListingWithCardIncludes[]).map(listingToCardDto);
+    });
+  }
+
+  async findNewReleases(): Promise<ListingCardDto[]> {
+    return this.getCachedSection(SECTION_KEYS.newReleases, async () => {
+      const settings = await this.prisma.agents_settings.findUnique({ where: { id: 1n } });
+      const limit = settings?.newReleasesItemCount ?? 8;
+      const rows = await this.prisma.agents_listing.findMany({
+        where: { status: AgentsListingStatus.PUBLISHED, deletedAt: null },
+        orderBy: [{ publishedAt: { sort: 'desc', nulls: 'last' } }, { id: 'desc' }],
+        take: limit,
+        include: {
+          category: { select: { nameFa: true } },
+          screenshots: {
+            take: 1,
+            orderBy: { order: 'asc' },
+            include: { file: { select: { id: true } } },
+          },
+        },
+      });
+      return (rows as unknown as ListingWithCardIncludes[]).map(listingToCardDto);
+    });
+  }
+
+  async findRecentActivity(): Promise<RecentActivityItem[]> {
+    return this.getCachedSection(SECTION_KEYS.recentActivity, async () => {
+      interface RawRow {
+        kind: string;
+        userId: bigint;
+        slug: string;
+        titleFa: string;
+        timestamp: Date;
+      }
+      const rows = await this.prisma.$queryRaw<RawRow[]>`
+        SELECT
+          CASE WHEN p."pricingTypeAtSale" = 'FREE' THEN 'install' ELSE 'purchase' END AS kind,
+          p."userId",
+          l.slug,
+          l."titleFa",
+          p."createdAt" AS timestamp
+        FROM agents_purchase p
+        JOIN agents_listing l ON l.id = p."listingId"
+        WHERE p.status = 'COMPLETED' AND l."deletedAt" IS NULL
+        UNION ALL
+        SELECT
+          'review' AS kind,
+          r."authorUserId" AS "userId",
+          l.slug,
+          l."titleFa",
+          r."createdAt" AS timestamp
+        FROM agents_review r
+        JOIN agents_listing l ON l.id = r."listingId"
+        WHERE r."isHidden" = false AND l."deletedAt" IS NULL
+        ORDER BY timestamp DESC
+        LIMIT 50
+      `;
+      return rows.map((row) => ({
+        kind: row.kind as 'install' | 'purchase' | 'review',
+        userHandle: makerHandle(row.userId),
+        listingSlug: row.slug,
+        listingTitleFa: row.titleFa,
+        timestamp: row.timestamp.toISOString(),
+      }));
+    });
+  }
+
+  async invalidateSectionCaches(): Promise<void> {
+    try {
+      await this.redis
+        .getClient()
+        .del(
+          SECTION_KEYS.featured,
+          SECTION_KEYS.bestSellers,
+          SECTION_KEYS.newReleases,
+          SECTION_KEYS.recentActivity,
+        );
+    } catch (err) {
+      this.logger.error(`Section cache invalidation failed: ${String(err)}`);
+    }
+  }
+
+  private async getCachedSection<T>(key: string, compute: () => Promise<T>): Promise<T> {
+    const client = this.redis.getClient();
+    const hit = await client.get(key);
+    if (hit !== null) return JSON.parse(hit) as T;
+    const value = await compute();
+    await client.setex(key, 60, JSON.stringify(value));
+    return value;
+  }
+
   // ─── Create ────────────────────────────────────────────────────────────
 
   async create(input: { makerUserId: bigint; dto: CreateListingInput }): Promise<agents_listing> {
@@ -375,6 +522,8 @@ export class ListingsService {
       })
       .catch((err) => this.logger.error(`Post-commit SMS failed: ${String(err)}`));
 
+    void this.invalidateSectionCaches();
+
     await this.audit.log({
       actorUserId: adminUserId,
       action: AGENTS_AUDIT_ACTIONS.AGENTS_LISTING_APPROVED,
@@ -458,6 +607,8 @@ export class ListingsService {
       return next;
     });
 
+    void this.invalidateSectionCaches();
+
     await this.audit.log({
       actorUserId: adminUserId,
       action: AGENTS_AUDIT_ACTIONS.AGENTS_LISTING_SUSPENDED,
@@ -481,6 +632,8 @@ export class ListingsService {
         data: { status: AgentsListingStatus.PUBLISHED, suspensionReason: null },
       });
     });
+
+    void this.invalidateSectionCaches();
 
     await this.audit.log({
       actorUserId: adminUserId,

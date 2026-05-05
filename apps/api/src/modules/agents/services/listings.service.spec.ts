@@ -6,6 +6,7 @@ import { ErrorCode } from '../../../common/types/response.types';
 import { AuditService } from '../../../core/audit/audit.service';
 import { NotificationsService } from '../../../core/notifications/notifications.service';
 import { PrismaService } from '../../../core/prisma/prisma.service';
+import { RedisService } from '../../../core/redis/redis.service';
 import { AGENTS_AUDIT_ACTIONS } from '../contract';
 
 import { ListingsService } from './listings.service';
@@ -104,12 +105,21 @@ describe('ListingsService', () => {
     dispatch = jest.fn(async () => ({ dispatched: ['IN_APP'], failures: [] }));
     auditLog = jest.fn(async () => undefined);
 
+    const redisMock = {
+      getClient: () => ({
+        get: jest.fn(async () => null),
+        setex: jest.fn(async () => 'OK'),
+        del: jest.fn(async () => 4),
+      }),
+    };
+
     const moduleRef = await Test.createTestingModule({
       providers: [
         ListingsService,
         { provide: PrismaService, useValue: prisma },
         { provide: NotificationsService, useValue: { dispatch } },
         { provide: AuditService, useValue: { log: auditLog } },
+        { provide: RedisService, useValue: redisMock },
       ],
     }).compile();
 
