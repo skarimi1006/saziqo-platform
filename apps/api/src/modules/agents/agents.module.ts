@@ -6,6 +6,7 @@ import { NotificationsModule } from '../../core/notifications/notifications.modu
 import { CatalogController } from './controllers/catalog.controller';
 import { CategoriesController } from './controllers/categories.controller';
 import { ListingsController } from './controllers/listings.controller';
+import { SearchController } from './controllers/search.controller';
 import { SectionsController } from './controllers/sections.controller';
 import { AgentsCartAdapterService } from './services/cart-adapter.service';
 import { CategoriesBootstrapService } from './services/categories.bootstrap';
@@ -15,7 +16,13 @@ import { SettingsBootstrapService } from './services/settings.bootstrap';
 
 @Module({
   imports: [NotificationsModule],
-  controllers: [CatalogController, CategoriesController, ListingsController, SectionsController],
+  controllers: [
+    CatalogController,
+    CategoriesController,
+    ListingsController,
+    SearchController,
+    SectionsController,
+  ],
   providers: [
     SettingsBootstrapService,
     CategoriesBootstrapService,

@@ -92,7 +92,33 @@ export interface FindPublishedResult {
   hasMore: boolean;
 }
 
+export interface SearchInput {
+  q: string;
+  filters: FindPublishedFilters;
+  offset: number;
+  limit: number;
+}
+
+export interface SearchResult {
+  items: ListingWithCardIncludes[];
+  nextOffset: number | null;
+  hasMore: boolean;
+}
+
+// CLAUDE: Defensive sanitization for FTS input. Strips null bytes
+// (Postgres rejects them in text params), collapses runs of whitespace
+// to a single space (cleaner plainto_tsquery lexemes + ILIKE patterns),
+// and clamps to 200 chars to bound rank computation. Order matters:
+// trim AFTER whitespace collapse so a single trailing space does not
+// survive; slice last so a 199-char query with a trailing space is not
+// trimmed back to 198.
+export function sanitizeSearchQuery(q: string): string {
+  return q.replace(/\x00/g, '').replace(/\s+/g, ' ').trim().slice(0, 200);
+}
+
 type Tx = Prisma.TransactionClient;
+
+const FTS_FALLBACK_THRESHOLD = 10;
 
 @Injectable()
 export class ListingsService {
@@ -191,6 +217,104 @@ export class ListingsService {
     return {
       items: items as unknown as ListingWithCardIncludes[],
       nextCursor,
+      hasMore,
+    };
+  }
+
+  async searchPublished(input: SearchInput): Promise<SearchResult> {
+    const sanitized = sanitizeSearchQuery(input.q);
+    const filters = input.filters;
+
+    // CLAUDE: Build the per-row filter clauses once; they apply identically
+    // to both the FTS pass and the ILIKE fallback.
+    const filterClauses: Prisma.Sql[] = [];
+    if (filters.categoryId !== undefined) {
+      filterClauses.push(Prisma.sql`AND "categoryId" = ${filters.categoryId}`);
+    }
+    if (filters.freeOnly === true) {
+      filterClauses.push(Prisma.sql`AND "pricingType" = 'FREE'::"AgentsPricingType"`);
+    } else if (filters.pricingType !== undefined) {
+      filterClauses.push(
+        Prisma.sql`AND "pricingType" = ${filters.pricingType}::"AgentsPricingType"`,
+      );
+    }
+    if (filters.minRating !== undefined) {
+      filterClauses.push(Prisma.sql`AND "ratingAverage" >= ${filters.minRating}`);
+    }
+    const filterSql = filterClauses.length > 0 ? Prisma.join(filterClauses, ' ') : Prisma.empty;
+
+    // Pass 1: FTS ranked by ts_rank then totalUsers tie-break.
+    // We over-fetch by 1 to detect hasMore for the FTS pass alone (used
+    // only when FTS returned >= threshold; otherwise the merge below
+    // determines hasMore).
+    const ftsRows = await this.prisma.$queryRaw<Array<{ id: bigint }>>`
+      SELECT id FROM agents_listing
+      WHERE status = 'PUBLISHED'::"AgentsListingStatus"
+        AND "deletedAt" IS NULL
+        AND "searchVector" @@ plainto_tsquery('simple', ${sanitized})
+        ${filterSql}
+      ORDER BY ts_rank("searchVector", plainto_tsquery('simple', ${sanitized})) DESC,
+               "totalUsers" DESC,
+               id DESC
+      LIMIT ${input.limit + 1} OFFSET ${input.offset}
+    `;
+
+    const orderedIds: bigint[] = ftsRows.map((r) => r.id);
+    const seen = new Set(orderedIds.map((id) => id.toString()));
+
+    // Pass 2 (fallback): if FTS produced fewer than the threshold, augment
+    // with ILIKE on titleFa/slug. Trigram GIN indexes from Phase 1E make
+    // this fast even for substring patterns. Dedupe by id, append at end.
+    if (orderedIds.length < FTS_FALLBACK_THRESHOLD) {
+      const pattern = `%${sanitized}%`;
+      const remaining = input.limit + 1 - orderedIds.length;
+      const ilikeRows = await this.prisma.$queryRaw<Array<{ id: bigint }>>`
+        SELECT id FROM agents_listing
+        WHERE status = 'PUBLISHED'::"AgentsListingStatus"
+          AND "deletedAt" IS NULL
+          AND ("titleFa" ILIKE ${pattern} OR "slug" ILIKE ${pattern})
+          ${filterSql}
+        ORDER BY "totalUsers" DESC, id DESC
+        LIMIT ${remaining}
+      `;
+      for (const row of ilikeRows) {
+        const key = row.id.toString();
+        if (!seen.has(key)) {
+          seen.add(key);
+          orderedIds.push(row.id);
+        }
+      }
+    }
+
+    const hasMore = orderedIds.length > input.limit;
+    const pageIds = hasMore ? orderedIds.slice(0, input.limit) : orderedIds;
+    const nextOffset = hasMore ? input.offset + input.limit : null;
+
+    if (pageIds.length === 0) {
+      return { items: [], nextOffset, hasMore: false };
+    }
+
+    // Hydrate full card-shaped rows in a single query, then re-order in
+    // memory to match the ranked id list.
+    const rows = await this.prisma.agents_listing.findMany({
+      where: { id: { in: pageIds } },
+      include: {
+        category: { select: { nameFa: true } },
+        screenshots: {
+          take: 1,
+          orderBy: { order: 'asc' },
+          include: { file: { select: { id: true } } },
+        },
+      },
+    });
+    const rowById = new Map(rows.map((r) => [r.id.toString(), r]));
+    const items = pageIds
+      .map((id) => rowById.get(id.toString()))
+      .filter((r): r is NonNullable<typeof r> => r !== undefined);
+
+    return {
+      items: items as unknown as ListingWithCardIncludes[],
+      nextOffset,
       hasMore,
     };
   }
