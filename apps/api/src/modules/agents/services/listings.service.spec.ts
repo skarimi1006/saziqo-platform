@@ -9,6 +9,7 @@ import { PrismaService } from '../../../core/prisma/prisma.service';
 import { RedisService } from '../../../core/redis/redis.service';
 import { AGENTS_AUDIT_ACTIONS } from '../contract';
 
+import { CategoriesService } from './categories.service';
 import { ListingsService } from './listings.service';
 
 interface MockListingRow {
@@ -120,6 +121,10 @@ describe('ListingsService', () => {
         { provide: NotificationsService, useValue: { dispatch } },
         { provide: AuditService, useValue: { log: auditLog } },
         { provide: RedisService, useValue: redisMock },
+        {
+          provide: CategoriesService,
+          useValue: { invalidateCache: jest.fn(async () => undefined) },
+        },
       ],
     }).compile();
 

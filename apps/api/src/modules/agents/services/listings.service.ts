@@ -29,6 +29,8 @@ import {
 import type { RecentActivityItem } from '../dto/section.dto';
 import type { AgentsPricingTypeName } from '../types';
 
+import { CategoriesService } from './categories.service';
+
 // CLAUDE: Stable Redis key names for each homepage section cache (60s TTL).
 const SECTION_KEYS = {
   featured: 'agents:section:featured',
@@ -101,6 +103,7 @@ export class ListingsService {
     private readonly notifications: NotificationsService,
     private readonly audit: AuditService,
     private readonly redis: RedisService,
+    private readonly categories: CategoriesService,
   ) {}
 
   // ─── Read methods ──────────────────────────────────────────────────────
@@ -523,6 +526,7 @@ export class ListingsService {
       .catch((err) => this.logger.error(`Post-commit SMS failed: ${String(err)}`));
 
     void this.invalidateSectionCaches();
+    void this.categories.invalidateCache();
 
     await this.audit.log({
       actorUserId: adminUserId,
@@ -608,6 +612,7 @@ export class ListingsService {
     });
 
     void this.invalidateSectionCaches();
+    void this.categories.invalidateCache();
 
     await this.audit.log({
       actorUserId: adminUserId,
@@ -634,6 +639,7 @@ export class ListingsService {
     });
 
     void this.invalidateSectionCaches();
+    void this.categories.invalidateCache();
 
     await this.audit.log({
       actorUserId: adminUserId,
