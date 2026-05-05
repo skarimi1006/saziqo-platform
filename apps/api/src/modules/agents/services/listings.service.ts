@@ -1,11 +1,17 @@
 import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
-import { AgentsListingStatus, Prisma, type agents_listing } from '@prisma/client';
+import {
+  AgentsListingStatus,
+  AgentsPricingType,
+  Prisma,
+  type agents_listing,
+} from '@prisma/client';
 
 import { ErrorCode } from '../../../common/types/response.types';
 import { AuditService } from '../../../core/audit/audit.service';
 import { NotificationsService } from '../../../core/notifications/notifications.service';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { AGENTS_AUDIT_ACTIONS } from '../contract';
+import type { ListingWithCardIncludes } from '../dto/listing-card.dto';
 import type { AgentsPricingTypeName } from '../types';
 
 // CLAUDE: Status transitions are encoded per-method, not as a flat matrix:
@@ -39,6 +45,26 @@ export interface CreateListingInput {
   oneTimePriceToman?: bigint | null;
   installInstructionsFaMd?: string | null;
   bundleFileId?: bigint | null;
+}
+
+export interface FindPublishedFilters {
+  categoryId?: bigint | undefined;
+  pricingType?: AgentsPricingType | undefined;
+  freeOnly?: boolean | undefined;
+  minRating?: number | undefined;
+}
+
+export interface FindPublishedInput {
+  filters: FindPublishedFilters;
+  cursor?: bigint | undefined;
+  limit: number;
+  sort: 'newest' | 'most-installed' | 'top-rated';
+}
+
+export interface FindPublishedResult {
+  items: ListingWithCardIncludes[];
+  nextCursor: bigint | null;
+  hasMore: boolean;
 }
 
 type Tx = Prisma.TransactionClient;
@@ -75,6 +101,71 @@ export class ListingsService {
 
   async findByIdForAdmin(id: bigint): Promise<agents_listing | null> {
     return this.prisma.agents_listing.findFirst({ where: { id, deletedAt: null } });
+  }
+
+  async findPublished(input: FindPublishedInput): Promise<FindPublishedResult> {
+    const { filters, cursor, limit, sort } = input;
+
+    const where: Prisma.agents_listingWhereInput = {
+      status: AgentsListingStatus.PUBLISHED,
+      deletedAt: null,
+    };
+
+    if (filters.categoryId !== undefined) {
+      where.categoryId = filters.categoryId;
+    }
+
+    if (filters.freeOnly === true) {
+      where.pricingType = AgentsPricingType.FREE;
+    } else if (filters.pricingType !== undefined) {
+      where.pricingType = filters.pricingType;
+    }
+
+    if (filters.minRating !== undefined) {
+      where.ratingAverage = { gte: new Prisma.Decimal(filters.minRating) };
+    }
+
+    if (cursor !== undefined) {
+      where.id = { lt: cursor };
+    }
+
+    const orderBy: Prisma.agents_listingOrderByWithRelationInput[] = [];
+    switch (sort) {
+      case 'newest':
+        orderBy.push({ publishedAt: { sort: 'desc', nulls: 'last' } });
+        break;
+      case 'most-installed':
+        orderBy.push({ totalUsers: 'desc' });
+        break;
+      case 'top-rated':
+        orderBy.push({ ratingAverage: { sort: 'desc', nulls: 'last' } });
+        break;
+    }
+    orderBy.push({ id: 'desc' });
+
+    const rows = await this.prisma.agents_listing.findMany({
+      where,
+      orderBy,
+      take: limit + 1,
+      include: {
+        category: { select: { nameFa: true } },
+        screenshots: {
+          take: 1,
+          orderBy: { order: 'asc' },
+          include: { file: { select: { id: true } } },
+        },
+      },
+    });
+
+    const hasMore = rows.length > limit;
+    const items = hasMore ? rows.slice(0, limit) : rows;
+    const nextCursor = hasMore ? items[items.length - 1]!.id : null;
+
+    return {
+      items: items as unknown as ListingWithCardIncludes[],
+      nextCursor,
+      hasMore,
+    };
   }
 
   // ─── Create ────────────────────────────────────────────────────────────
