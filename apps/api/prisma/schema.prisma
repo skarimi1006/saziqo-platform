@@ -497,6 +497,7 @@ model agents_listing {
   // Denormalized counters; kept in sync from purchase / run-consume paths.
   totalUsers              BigInt    @default(0)
   totalRuns               BigInt    @default(0)
+  viewCount               BigInt    @default(0)
   ratingAverage           Decimal?  @db.Decimal(3, 2)
   ratingCount             BigInt    @default(0)
   // Postgres FTS column populated by trigger added in Phase 1E migration.

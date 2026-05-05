@@ -1,7 +1,18 @@
-import { Controller, Get, HttpException, HttpStatus, Param, Req, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  HttpCode,
+  HttpException,
+  HttpStatus,
+  Param,
+  Post,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import type { Request } from 'express';
 
 import { Public } from '../../../common/decorators/public.decorator';
+import { RateLimit } from '../../../common/decorators/rate-limit.decorator';
 import { type AuthenticatedUser } from '../../../common/guards/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from '../../../common/guards/optional-jwt-auth.guard';
 import { ErrorCode } from '../../../common/types/response.types';
@@ -33,5 +44,15 @@ export class ListingsController {
       );
     }
     return detail;
+  }
+
+  // Fire-and-forget sampled view increment. Always returns 204 regardless
+  // of whether the slug exists — callers must not rely on this for truth.
+  @Post('listings/:slug/view')
+  @Public()
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RateLimit({ ip: '120/min' })
+  async recordView(@Param('slug') slug: string): Promise<void> {
+    void this.listingsService.recordView(slug, Math.random());
   }
 }

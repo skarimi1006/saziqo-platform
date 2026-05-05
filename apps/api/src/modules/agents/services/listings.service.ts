@@ -794,6 +794,18 @@ export class ListingsService {
     });
   }
 
+  // CLAUDE: sample is a caller-supplied random number in [0, 1). The method
+  // only writes if sample < 0.2 (1-in-5 chance), keeping viewCount
+  // approximate and reducing DB write pressure. Silently no-ops for
+  // non-existent or non-published slugs — the endpoint must never 404.
+  async recordView(slug: string, sample: number): Promise<void> {
+    if (sample >= 0.2) return;
+    await this.prisma.agents_listing.updateMany({
+      where: { slug, status: AgentsListingStatus.PUBLISHED, deletedAt: null },
+      data: { viewCount: { increment: 1 } },
+    });
+  }
+
   async recomputeRating(listingId: bigint): Promise<void> {
     const agg = await this.prisma.agents_review.aggregate({
       where: { listingId, isHidden: false },
