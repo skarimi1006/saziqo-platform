@@ -35,10 +35,10 @@ export default function NotificationsPage() {
       queryKey: ['notifications', 'all'],
       queryFn: async ({ pageParam }) => {
         const cursor = pageParam ? `&cursor=${pageParam as string}` : '';
-        const res = await apiClient.get<NotificationsPage>(
+        const res = await apiClient.get<NotificationItem[]>(
           `/users/me/notifications?limit=50${cursor}`,
         );
-        return res.data;
+        return { data: res.data, meta: res.meta as NotificationsPage['meta'] };
       },
       initialPageParam: undefined,
       getNextPageParam: (last) => (last.meta.hasMore ? last.meta.pagination.nextCursor : undefined),

@@ -46,10 +46,10 @@ export function NotificationsBell() {
   const { data: latestData, isLoading: latestLoading } = useQuery<NotificationItem[]>({
     queryKey: ['notifications', 'latest-unread'],
     queryFn: async () => {
-      const res = await apiClient.get<{ data: NotificationItem[] }>(
+      const res = await apiClient.get<NotificationItem[]>(
         '/users/me/notifications?unreadOnly=true&limit=10',
       );
-      return res.data.data;
+      return res.data;
     },
     enabled: open,
   });

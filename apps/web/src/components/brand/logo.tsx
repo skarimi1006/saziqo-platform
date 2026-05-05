@@ -1,51 +1,54 @@
+import { cn } from '@/lib/utils';
+
 interface LogoProps {
   variant?: 'dark' | 'light';
   size?: 'sm' | 'md' | 'lg';
+  className?: string;
 }
 
-const SIZE = {
-  sm: { height: 24, dotR: 5, fontSize: 14, gap: 5 },
-  md: { height: 32, dotR: 6, fontSize: 18, gap: 6 },
-  lg: { height: 48, dotR: 9, fontSize: 26, gap: 8 },
+const TEXT_SIZE = {
+  sm: 'text-sm',
+  md: 'text-lg',
+  lg: 'text-2xl',
+} as const;
+
+const DOT_SIZE = {
+  sm: 'size-1.5',
+  md: 'size-2',
+  lg: 'size-3',
 } as const;
 
 const TEXT_COLOR = {
-  dark: '#0f172a',
-  light: '#ffffff',
+  dark: 'text-foreground',
+  light: 'text-white',
 } as const;
 
-export function Logo({ variant = 'dark', size = 'md' }: LogoProps) {
-  const { height, dotR, fontSize, gap } = SIZE[size];
-  const dotDiameter = dotR * 2;
-  const totalWidth = dotDiameter + gap + fontSize * 3.6; // rough estimate for "سازیکو"
-  const cy = height / 2;
+const GAP_SIZE = {
+  sm: 'gap-1',
+  md: 'gap-1.5',
+  lg: 'gap-2',
+} as const;
 
+export function Logo({ variant = 'dark', size = 'md', className }: LogoProps) {
   return (
-    <svg
-      height={height}
-      width={totalWidth}
-      viewBox={`0 0 ${totalWidth} ${height}`}
-      aria-label="سازیکو"
+    <span
+      className={cn('inline-flex items-center', GAP_SIZE[size], className)}
       role="img"
-      direction="rtl"
+      aria-label="سازیکو"
     >
-      {/* Dot mark — on the start (right) side in RTL, but SVG is LTR-coordinate,
-          so we put it at x-end of the SVG and text extends left from it */}
-      <circle cx={totalWidth - dotR} cy={cy} r={dotR} fill="#f97316" />
-
-      {/* Wordmark — right-aligned text ending just before the dot */}
-      <text
-        x={totalWidth - dotDiameter - gap}
-        y={cy}
-        dominantBaseline="middle"
-        textAnchor="end"
-        fontSize={fontSize}
-        fontWeight={800}
-        fontFamily="var(--font-vazirmatn), system-ui, sans-serif"
-        fill={TEXT_COLOR[variant]}
+      <span
+        aria-hidden="true"
+        className={cn('inline-block shrink-0 rounded-full bg-primary', DOT_SIZE[size])}
+      />
+      <span
+        className={cn(
+          'font-extrabold leading-none tracking-tight',
+          TEXT_SIZE[size],
+          TEXT_COLOR[variant],
+        )}
       >
         سازیکو
-      </text>
-    </svg>
+      </span>
+    </span>
   );
 }

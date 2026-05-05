@@ -199,12 +199,25 @@ export class UsersService {
   // ──────── Writes (always primary DB via repo.write()) ────────
 
   async create(input: { phone: string }): Promise<User> {
-    return this.repo.write().user.create({
+    const user = await this.repo.write().user.create({
       data: {
         phone: input.phone,
         status: UserStatus.PENDING_PROFILE,
       },
     });
+
+    // SECURITY: New users get the `member` role so they have
+    // users:read:profile_self + users:update:profile_self. Without this they
+    // can't even complete onboarding (the very next step in the auth flow
+    // requires users:update:profile_self). The role is seeded on every API
+    // boot by BootstrapService; if it's missing here, fall through silently
+    // so the OTP flow doesn't crash — the bug surfaces as 403 on next request.
+    const memberRole = await this.repo.read().role.findUnique({ where: { name: 'member' } });
+    if (memberRole) {
+      await this.permissions.assignRoleToUser(user.id, memberRole.id);
+    }
+
+    return user;
   }
 
   async update(id: bigint, data: Prisma.UserUpdateInput): Promise<User> {

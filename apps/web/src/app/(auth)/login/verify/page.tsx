@@ -72,7 +72,7 @@ function VerifyForm({ phone, autoSubmit }: { phone: string; autoSubmit?: boolean
         const { accessToken, user, profileComplete } = response.data;
         useAuthStore.getState().setAuth(accessToken, user);
         const completed = profileComplete ?? user.status === 'ACTIVE';
-        router.push(completed ? '/dashboard' : '/onboarding/profile');
+        router.replace(completed ? '/dashboard' : '/onboarding/profile');
       } catch (err) {
         if (err instanceof ApiError) {
           toast.error(persianMessageForOtpError(err));

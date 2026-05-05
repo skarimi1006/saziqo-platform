@@ -11,8 +11,11 @@
 //      slot. Switched to `ps-8` (padding-inline-start) so the icon gap
 //      mirrors correctly. Same with the radio/checkbox indicator that
 //      sits at the start of the row — `start-2` instead of `left-2`.
-//   3. Radix DropdownMenu inherits `dir` from <html>, so the open
-//      direction (sub-menu side, animation origin) flips automatically.
+//   3. Radix's DropdownMenu does NOT auto-read `<html dir="rtl">` — it
+//      reads from a DirectionProvider context (defaulting to LTR if
+//      none). We default the Root to `dir="rtl"` here so menus open,
+//      align (`align="end"` etc.), and animate from the correct side
+//      on this RTL-only app. Callers can still override per-instance.
 
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
 import { CheckIcon, ChevronRightIcon, CircleIcon } from 'lucide-react';
@@ -20,7 +23,13 @@ import * as React from 'react';
 
 import { cn } from '@/lib/utils';
 
-const DropdownMenu = DropdownMenuPrimitive.Root;
+function DropdownMenu({
+  dir = 'rtl',
+  ...props
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
+  return <DropdownMenuPrimitive.Root dir={dir} {...props} />;
+}
+
 const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
 const DropdownMenuGroup = DropdownMenuPrimitive.Group;
 const DropdownMenuPortal = DropdownMenuPrimitive.Portal;

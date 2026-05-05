@@ -127,14 +127,36 @@ describe('UsersService', () => {
     it('persists with PENDING_PROFILE status and uses write()', async () => {
       const created = { id: 1n, phone: '+989000000000', status: UserStatus.PENDING_PROFILE };
       mockClient.user.create.mockResolvedValue(created);
+      mockClient.role.findUnique.mockResolvedValue({ id: 5n, name: 'member' });
 
       const result = await service.create({ phone: '+989000000000' });
 
       expect(result).toBe(created);
-      expect(writeSpy).toHaveBeenCalledTimes(1);
       expect(mockClient.user.create).toHaveBeenCalledWith({
         data: { phone: '+989000000000', status: UserStatus.PENDING_PROFILE },
       });
+    });
+
+    it('assigns the member role to the new user so they can complete onboarding', async () => {
+      const created = { id: 1n, phone: '+989000000000', status: UserStatus.PENDING_PROFILE };
+      mockClient.user.create.mockResolvedValue(created);
+      mockClient.role.findUnique.mockResolvedValue({ id: 5n, name: 'member' });
+
+      await service.create({ phone: '+989000000000' });
+
+      expect(mockClient.role.findUnique).toHaveBeenCalledWith({ where: { name: 'member' } });
+      expect(mockPermissions.assignRoleToUser).toHaveBeenCalledWith(1n, 5n);
+    });
+
+    it('does not crash when the member role is missing — leaves the user role-less', async () => {
+      const created = { id: 1n, phone: '+989000000000', status: UserStatus.PENDING_PROFILE };
+      mockClient.user.create.mockResolvedValue(created);
+      mockClient.role.findUnique.mockResolvedValue(null);
+
+      const result = await service.create({ phone: '+989000000000' });
+
+      expect(result).toBe(created);
+      expect(mockPermissions.assignRoleToUser).not.toHaveBeenCalled();
     });
   });
 

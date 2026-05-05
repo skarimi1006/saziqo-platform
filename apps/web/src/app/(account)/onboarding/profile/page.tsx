@@ -84,7 +84,7 @@ export default function CompleteProfilePage() {
       });
       await useAuthStore.getState().refreshUser();
       toast.success('پروفایل شما تکمیل شد. خوش آمدید!');
-      router.push('/dashboard');
+      router.replace('/dashboard');
     } catch (err) {
       if (!(err instanceof ApiError)) {
         toast.error('خطا در ذخیره پروفایل');

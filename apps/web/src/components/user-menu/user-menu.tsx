@@ -46,10 +46,14 @@ export function UserMenu() {
       <DropdownMenuContent align="end" className="w-48">
         {user && (
           <div className="px-2 py-1.5">
-            <p className="text-sm font-medium truncate">
-              {user.firstName} {user.lastName}
+            {(user.firstName ?? user.lastName) && (
+              <p className="text-sm font-medium truncate">
+                {[user.firstName, user.lastName].filter(Boolean).join(' ')}
+              </p>
+            )}
+            <p className="text-muted-foreground text-xs truncate" dir="ltr">
+              {user.phone}
             </p>
-            <p className="text-muted-foreground text-xs truncate">{user.phone}</p>
           </div>
         )}
 
