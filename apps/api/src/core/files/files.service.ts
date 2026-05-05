@@ -183,7 +183,11 @@ export class FilesService {
   // deleted rows produce 410 GONE so callers can distinguish "this used to
   // exist" from "this never existed" — for non-owners with no admin
   // permission we still return 404 to avoid id-probe leaks.
-  async findReadableById(id: bigint, currentUserId: bigint): Promise<File> {
+  async findReadableById(
+    id: bigint,
+    currentUserId: bigint,
+    bypassOwnerCheck = false,
+  ): Promise<File> {
     const file = await this.prisma.file.findUnique({ where: { id } });
     if (!file) {
       throw new HttpException(
@@ -192,12 +196,18 @@ export class FilesService {
       );
     }
 
+    // SECURITY: bypassOwnerCheck is for trusted module callers that have
+    // already proven the user's right to read the file via a stronger
+    // domain-specific check (e.g. agents module verifying a buyer owns
+    // the listing whose bundleFileId points here). The default remains
+    // owner-or-admin so HTTP-direct access is still locked down.
     const isOwner = file.ownerUserId === currentUserId;
-    const hasAdminAccess = isOwner
-      ? false
-      : await this.permissions.userHasPermission(currentUserId, ADMIN_READ_ANY_FILE);
+    const hasAdminAccess =
+      isOwner || bypassOwnerCheck
+        ? false
+        : await this.permissions.userHasPermission(currentUserId, ADMIN_READ_ANY_FILE);
 
-    if (!isOwner && !hasAdminAccess) {
+    if (!isOwner && !hasAdminAccess && !bypassOwnerCheck) {
       // 404 (not 403) so non-admin users cannot probe for valid file ids.
       throw new HttpException(
         { code: ErrorCode.NOT_FOUND, message: 'File not found' },
@@ -217,8 +227,12 @@ export class FilesService {
     return file;
   }
 
-  async streamForDownload(id: bigint, currentUserId: bigint): Promise<FileDownloadStream> {
-    const file = await this.findReadableById(id, currentUserId);
+  async streamForDownload(
+    id: bigint,
+    currentUserId: bigint,
+    bypassOwnerCheck = false,
+  ): Promise<FileDownloadStream> {
+    const file = await this.findReadableById(id, currentUserId, bypassOwnerCheck);
     const stream = await this.fileStore.get(file.path);
     return {
       stream,

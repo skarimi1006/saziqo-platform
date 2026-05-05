@@ -7,6 +7,7 @@ import { AgentsCartController } from './controllers/cart.controller';
 import { CatalogController } from './controllers/catalog.controller';
 import { CategoriesController } from './controllers/categories.controller';
 import { AgentsCheckoutController } from './controllers/checkout.controller';
+import { AgentsDownloadController } from './controllers/download.controller';
 import { AgentsLibraryController } from './controllers/library.controller';
 import { ListingsController } from './controllers/listings.controller';
 import { SearchController } from './controllers/search.controller';
@@ -16,6 +17,7 @@ import { CartService } from './services/cart.service';
 import { CategoriesBootstrapService } from './services/categories.bootstrap';
 import { CategoriesService } from './services/categories.service';
 import { CheckoutService } from './services/checkout.service';
+import { DownloadService } from './services/download.service';
 import { LibraryService } from './services/library.service';
 import { ListingsService } from './services/listings.service';
 import { SettingsBootstrapService } from './services/settings.bootstrap';
@@ -25,6 +27,7 @@ import { SettingsBootstrapService } from './services/settings.bootstrap';
   controllers: [
     AgentsCartController,
     AgentsCheckoutController,
+    AgentsDownloadController,
     AgentsLibraryController,
     CatalogController,
     CategoriesController,
@@ -39,10 +42,18 @@ import { SettingsBootstrapService } from './services/settings.bootstrap';
     CartService,
     CategoriesService,
     CheckoutService,
+    DownloadService,
     LibraryService,
     ListingsService,
     OptionalJwtAuthGuard,
   ],
-  exports: [ListingsService, CategoriesService, CartService, CheckoutService, LibraryService],
+  exports: [
+    ListingsService,
+    CategoriesService,
+    CartService,
+    CheckoutService,
+    DownloadService,
+    LibraryService,
+  ],
 })
 export class AgentsModule {}
